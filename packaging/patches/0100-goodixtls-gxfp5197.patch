@@ -1,3 +1,20 @@
+Description: Goodix GXFP5187/GXFP5197 SPI (TLS-PSK) driver "goodixtls"
+ Adds the goodixtls driver to libfprint 1.94.9 and lets the generated spidev
+ udev rule match ACPI devices that also carry a _CID.
+ .
+ The driver is Benjamin Allègre's (Sigfrodr) GXFP5187 driver from
+ https://github.com/Sigfrodr/libfprint-goodixtls (commit 17354ac,
+ LGPL-2.1-or-later), changed in 2026 by Matthias Gruss for the GXFP5197
+ (Huawei MateBook D, VLT-W50): split SPI frames, per-model table, PSK address,
+ MCU state after the handshake, timing and background handling.
+ Changes to libfprint's own files: libfprint/meson.build, meson.build,
+ tests/meson.build (driver and tests registered),
+ libfprint/fprint-list-udev-rules.c (acpi:HID:* match), 2026, Matthias Gruss.
+Author: Matthias Gruss
+Origin: https://github.com/fruchtpfote/libfprint-gxfp5197
+Forwarded: not-needed
+Last-Update: 2026-10-22
+---
 diff --git a/libfprint/drivers/goodixtls/config_pcap.c b/libfprint/drivers/goodixtls/config_pcap.c
 new file mode 100644
 index 0000000..6cd7323
@@ -56,12 +73,14 @@ index 0000000..6cd7323
 +};
 diff --git a/libfprint/drivers/goodixtls/goodix_model.c b/libfprint/drivers/goodixtls/goodix_model.c
 new file mode 100644
-index 0000000..88913fa
+index 0000000..f4d6693
 --- /dev/null
 +++ b/libfprint/drivers/goodixtls/goodix_model.c
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,193 @@
 +/*
 + * Goodix SPI (TLS-PSK) sensors: per-model constants and protocol helpers
++ *
++ * Copyright (C) 2026 Matthias Gruss
 + *
 + * SPDX-License-Identifier: LGPL-2.1-or-later
 + *
@@ -253,12 +272,14 @@ index 0000000..88913fa
 +}
 diff --git a/libfprint/drivers/goodixtls/goodix_model.h b/libfprint/drivers/goodixtls/goodix_model.h
 new file mode 100644
-index 0000000..229c4af
+index 0000000..daf68af
 --- /dev/null
 +++ b/libfprint/drivers/goodixtls/goodix_model.h
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,93 @@
 +/*
 + * Goodix SPI (TLS-PSK) sensors: per-model constants and protocol helpers
++ *
++ * Copyright (C) 2026 Matthias Gruss
 + *
 + * SPDX-License-Identifier: LGPL-2.1-or-later
 + *
@@ -4227,14 +4248,17 @@ index 0000000..64da87b
 +}
 diff --git a/libfprint/drivers/goodixtls/goodixtls.h b/libfprint/drivers/goodixtls/goodixtls.h
 new file mode 100644
-index 0000000..81be68a
+index 0000000..418cdd6
 --- /dev/null
 +++ b/libfprint/drivers/goodixtls/goodixtls.h
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,104 @@
 +/*
 + * Goodix GXFP5187/GXFP5197 SPI (TLS-PSK) driver for libfprint
 + *
 + * Copyright (C) 2026 Benjamin Allègre (https://github.com/Sigfrodr)
++ *
++ * GXFP5197 support and the per-model table:
++ * Copyright (C) 2026 Matthias Gruss
 + *
 + * SPDX-License-Identifier: LGPL-2.1-or-later
 + *
@@ -4433,12 +4457,14 @@ index 07c924b..364940b 100644
 +endif
 diff --git a/tests/test-goodixtls.c b/tests/test-goodixtls.c
 new file mode 100644
-index 0000000..eb88f5c
+index 0000000..6a278bd
 --- /dev/null
 +++ b/tests/test-goodixtls.c
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,175 @@
 +/*
 + * Unit tests for the goodixtls driver's protocol helpers and model table
++ *
++ * Copyright (C) 2026 Matthias Gruss
 + *
 + * SPDX-License-Identifier: LGPL-2.1-or-later
 + *
@@ -4612,11 +4638,13 @@ index 0000000..eb88f5c
 +}
 diff --git a/tests/test-udev-rules.sh b/tests/test-udev-rules.sh
 new file mode 100755
-index 0000000..3d0007e
+index 0000000..07a9d59
 --- /dev/null
 +++ b/tests/test-udev-rules.sh
-@@ -0,0 +1,21 @@
+@@ -0,0 +1,23 @@
 +#!/bin/sh -e
++# SPDX-License-Identifier: LGPL-2.1-or-later
++# Copyright (C) 2026 Matthias Gruss
 +# Devices with a _CID (e.g. GXFP5197) have MODALIAS acpi:HID:CID:, so an
 +# exact acpi:HID: match never binds spidev.
 +
