@@ -1,0 +1,6 @@
+# Keep the locally built libfprint with GXFP5197 support; a Debian update of
+# libfprint would otherwise replace it. Rebuild with packaging/build-deb.sh
+# when Debian ships a new libfprint, then remove or adjust this file.
+Package: libfprint-2-2 gir1.2-fprint-2.0 libfprint-2-dev libfprint-2-doc libfprint-2-tests
+Pin: version 1:1.94.9-1+gxfp5197*
+Pin-Priority: 1001
