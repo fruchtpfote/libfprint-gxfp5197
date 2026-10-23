@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: 0BSD
+# Arch Linux's libfprint PKGBUILD (Copyright Arch Linux Contributors, 0BSD)
+# plus the goodixtls driver patch (LGPL-2.1-or-later) and the fprintd drop-in
+# that lets fprintd pulse the sensor's reset line.
+#     cp ../patches/1.94.100/0100-goodixtls-gxfp5197.patch ../fprintd-goodixtls.conf .
+#     makepkg -si
+# Then add "libfprint" to IgnorePkg in /etc/pacman.conf.
+
+pkgname=libfprint
+pkgver=1.94.100
+pkgrel=1.1
+pkgdesc="Library for fingerprint readers (with goodixtls: Goodix GXFP5187/GXFP5197)"
+url="https://github.com/fruchtpfote/libfprint-gxfp5197"
+arch=(x86_64)
+license=(LGPL-2.1-or-later)
+depends=(libgcc glib2 glibc libgudev libgusb openssl pixman)
+makedepends=(git glib2-devel gobject-introspection gtk-doc meson python-cairo
+             python-gobject systemd)
+checkdepends=(cairo umockdev)
+provides=(libfprint-2.so)
+groups=(fprint)
+# The release commit of tag v1.94.100, pinned by hash.
+source=("git+https://gitlab.freedesktop.org/libfprint/libfprint.git#commit=80a4b5ec612892c5c056c48dddaa561452cf37ec"
+        0100-goodixtls-gxfp5197.patch
+        fprintd-goodixtls.conf)
+b2sums=('SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+  patch -d $pkgname -p1 < 0100-goodixtls-gxfp5197.patch
+}
+
+build() {
+  arch-meson $pkgname build -D drivers=all -D installed-tests=false
+  meson compile -C build
+}
+
+check() {
+  meson test -C build --print-errorlogs
+}
+
+package() {
+  meson install -C build --destdir "$pkgdir"
+  install -Dm644 fprintd-goodixtls.conf \
+    "$pkgdir/usr/lib/systemd/system/fprintd.service.d/goodixtls.conf"
+}

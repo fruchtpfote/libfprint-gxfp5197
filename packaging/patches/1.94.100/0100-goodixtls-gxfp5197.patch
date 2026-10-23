@@ -1,0 +1,4692 @@
+Description: Goodix GXFP5187/GXFP5197 SPI (TLS-PSK) driver "goodixtls"
+ Adds the goodixtls driver to libfprint 1.94.100 and lets the generated spidev
+ udev rule match ACPI devices that also carry a _CID.
+ .
+ The driver is Benjamin Allègre's (Sigfrodr) GXFP5187 driver from
+ https://github.com/Sigfrodr/libfprint-goodixtls (commit 17354ac,
+ LGPL-2.1-or-later), changed in 2026 by Matthias Gruss for the GXFP5197
+ (Huawei MateBook D, VLT-W50): split SPI frames, per-model table, PSK address,
+ MCU state after the handshake, timing and background handling.
+ Changes to libfprint's own files: libfprint/meson.build, meson.build,
+ tests/meson.build (driver and tests registered),
+ libfprint/fprint-list-udev-rules.c (acpi:HID:* match), 2026, Matthias Gruss.
+Author: Matthias Gruss
+Origin: https://github.com/fruchtpfote/libfprint-gxfp5197
+Forwarded: not-needed
+Last-Update: 2026-10-22
+---
+diff --git a/libfprint/drivers/goodixtls/config_pcap.c b/libfprint/drivers/goodixtls/config_pcap.c
+new file mode 100644
+index 00000000..6cd7323d
+--- /dev/null
++++ b/libfprint/drivers/goodixtls/config_pcap.c
+@@ -0,0 +1,50 @@
++/*
++ * Sensor configuration blob, as observed on the wire
++ *
++ * Copyright (C) 2026 Benjamin Allègre (https://github.com/Sigfrodr)
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/* Config capteur (trame 19 du pcap wireshark-goodix) — ouvre le gate. */
++#include <glib.h>
++
++const gsize CONFIG_PCAP_LEN = 256;
++const guint8 CONFIG_PCAP[256] = {
++  0x18, 0x11, 0x6c, 0x7d, 0x24, 0xa1, 0x24, 0xc5, 0x10, 0xd5, 0x10, 0xe5,
++  0x00, 0xe5, 0x00, 0xe5, 0x00, 0x04, 0x02, 0x00, 0x00, 0x08, 0x00, 0x11,
++  0x11, 0xba, 0x00, 0x01, 0x80, 0xca, 0x00, 0x07, 0x00, 0x84, 0x00, 0xbe,
++  0xb2, 0x86, 0x00, 0xc5, 0xb9, 0x88, 0x00, 0xb5, 0xad, 0x8a, 0x00, 0x9d,
++  0x95, 0x8c, 0x00, 0x00, 0xbe, 0x8e, 0x00, 0x00, 0xc5, 0x90, 0x00, 0x00,
++  0xb5, 0x92, 0x00, 0x00, 0x9d, 0x94, 0x00, 0x00, 0xaf, 0x96, 0x00, 0x00,
++  0xbf, 0x98, 0x00, 0x00, 0xb6, 0x9a, 0x00, 0x00, 0xa7, 0xd2, 0x00, 0x00,
++  0x00, 0xd4, 0x00, 0x00, 0x00, 0xd6, 0x00, 0x00, 0x00, 0xd8, 0x00, 0x00,
++  0x00, 0x50, 0x00, 0x01, 0x05, 0xd0, 0x00, 0x00, 0x00, 0x70, 0x00, 0x00,
++  0x00, 0x72, 0x00, 0x78, 0x56, 0x74, 0x00, 0x34, 0x12, 0x20, 0x00, 0x10,
++  0x40, 0x12, 0x00, 0x03, 0x04, 0x2a, 0x01, 0x02, 0x00, 0x22, 0x00, 0x01,
++  0x20, 0x24, 0x00, 0x32, 0x00, 0x80, 0x00, 0x01, 0x00, 0x5c, 0x00, 0x80,
++  0x00, 0x56, 0x00, 0x34, 0x2c, 0x58, 0x00, 0x01, 0x00, 0x32, 0x00, 0x2c,
++  0x02, 0x82, 0x00, 0x7f, 0x0c, 0x2a, 0x01, 0x82, 0x03, 0x22, 0x00, 0x01,
++  0x20, 0x24, 0x00, 0x14, 0x00, 0x80, 0x00, 0x01, 0x00, 0x5c, 0x00, 0x00,
++  0x01, 0x56, 0x00, 0x08, 0x2c, 0x58, 0x00, 0x03, 0x00, 0x32, 0x00, 0x08,
++  0x04, 0x82, 0x00, 0x80, 0x14, 0x2a, 0x01, 0x08, 0x00, 0x5c, 0x00, 0x80,
++  0x00, 0x62, 0x00, 0x0a, 0x04, 0x64, 0x00, 0x18, 0x00, 0x2a, 0x01, 0x08,
++  0x00, 0x5c, 0x00, 0x00, 0x01, 0x52, 0x00, 0x08, 0x00, 0x54, 0x00, 0x00,
++  0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++  0x00, 0x00, 0x12, 0x9a,
++};
+diff --git a/libfprint/drivers/goodixtls/goodix_model.c b/libfprint/drivers/goodixtls/goodix_model.c
+new file mode 100644
+index 00000000..57a5a2c6
+--- /dev/null
++++ b/libfprint/drivers/goodixtls/goodix_model.c
+@@ -0,0 +1,201 @@
++/*
++ * Goodix SPI (TLS-PSK) sensors: per-model constants and protocol helpers
++ *
++ * Copyright (C) 2026 Matthias Gruss
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ */
++
++#include <string.h>
++
++#include "goodix_model.h"
++
++extern const guint8 CONFIG_PCAP[];
++extern const gsize CONFIG_PCAP_LEN;
++
++/* Image capture sequence, byte for byte as Sigfrodr captured it on the
++ * GXFP5187. The GXFP5197 with firmware 13010 answers it unchanged (bench,
++ * 2026-10-22, docs/re/IMAGING.md). */
++static const gchar *const gx_capture_seq[] = {
++  "ae0b000600ffff0008ff01001acb",
++  "3623000d01a6a6b9b9bcbcb7b7a8a8babab7b7b8b8a8a8c1c1babab5b500000000000000004d",
++  "362500000100004e0175017a01710152017501700172015201830177016c01000000000000000033",
++  "500300010056",
++  "3623000d01a7a7bababdbdb8b8a9a9babab8b8b9b9a9a9c1c1bbbbb6b6000000000000000039",
++  "362500000100004d01740179017001510174016f0171015101830176016b0100000000000000003e",
++  "82060000820002009e",
++  "820300148091",
++  "200300010086",
++  NULL
++};
++
++/* The config table is filled in at first use: CONFIG_PCAP_LEN is not a
++ * constant expression. */
++static GxModel gx_models[] = {
++  /* Huawei MateBook X Pro (MACH-WX9), Sigfrodr's values unchanged. */
++  {
++    .acpi_id = "GXFP5187",
++    .fw_version = "GF3288_ST411SEC_APP_11033",
++    .psk_addr = 0x20007f0c,
++    .psk_len = 48,
++    .mem_bias = 0x08000000,
++    .capture_seq = gx_capture_seq,
++    .reset_line_default = 58,
++    .reset_settle_ms = 120,
++    .reset_from_dsdt = TRUE,
++    .spi_hz = 10000000,
++    .split_header = FALSE,
++    .img_w = 132, .img_h = 112,
++  },
++  /* Huawei MateBook D (VLT-W50). PSK address from the 13010 firmware
++   * (docs/re/FIRMWARE-13010.md), the rest as measured on the bench: the
++   * firmware is up 85 ms after reset release, and it receives the frame
++   * header and body by separate DMA transfers (docs/re/FIRST-CONTACT.md).
++   * Only 1 MHz has been tried for imaging. */
++  {
++    .acpi_id = "GXFP5197",
++    .fw_version = "GF3288_ST411SEC_APP_13010",
++    .psk_addr = 0x20007f14,
++    .psk_len = 48,
++    .mem_bias = 0x08000000,
++    .capture_seq = gx_capture_seq,
++    .reset_line_default = 58,
++    .reset_settle_ms = 300,
++    .reset_from_dsdt = FALSE,
++    .spi_hz = 1000000,
++    .split_header = TRUE,
++    .img_w = 132, .img_h = 112,
++  },
++};
++
++static void
++gx_models_init (void)
++{
++  static gsize done = 0;
++
++  if (g_once_init_enter (&done))
++    {
++      for (guint i = 0; i < G_N_ELEMENTS (gx_models); i++)
++        {
++          gx_models[i].config = CONFIG_PCAP;
++          gx_models[i].config_len = CONFIG_PCAP_LEN;
++        }
++      g_once_init_leave (&done, 1);
++    }
++}
++
++const GxModel *
++gx_model_lookup (const gchar *acpi_id, const gchar *fw_version)
++{
++  gx_models_init ();
++  if (!acpi_id || !fw_version)
++    return NULL;
++  for (guint i = 0; i < G_N_ELEMENTS (gx_models); i++)
++    if (g_str_equal (gx_models[i].acpi_id, acpi_id) &&
++        g_str_equal (gx_models[i].fw_version, fw_version))
++      return &gx_models[i];
++  return NULL;
++}
++
++const GxModel *
++gx_model_transport (const gchar *acpi_id)
++{
++  gx_models_init ();
++  if (!acpi_id)
++    return NULL;
++  for (guint i = 0; i < G_N_ELEMENTS (gx_models); i++)
++    if (g_str_equal (gx_models[i].acpi_id, acpi_id))
++      return &gx_models[i];
++  return NULL;
++}
++
++void
++gx_frame_header (guint8 type, guint16 len, guint8 out[4])
++{
++  out[0] = type;
++  out[1] = len & 0xFF;
++  out[2] = len >> 8;
++  out[3] = out[0] + out[1] + out[2];
++}
++
++void
++gx_decode_12bit (const guint8 *data, gsize len, guint16 *out, gsize n)
++{
++  gsize i, o = 0;
++
++  for (i = 0; i + 6 <= len && o + 4 <= n; i += 6)
++    {
++      const guint8 *c = data + i;
++      out[o++] = ((c[0] & 0xf) << 8) | c[1];
++      out[o++] = (c[3] << 4) | (c[0] >> 4);
++      out[o++] = ((c[5] & 0xf) << 8) | c[2];
++      out[o++] = (c[4] << 4) | (c[5] >> 4);
++    }
++}
++
++gboolean
++gx_bufsiz_ok (guint bufsiz)
++{
++  return bufsiz >= GX_RX_MAX;
++}
++
++void
++gx_mem_read_cmd (guint32 addr, guint32 len, guint32 bias, guint8 out[12])
++{
++  guint32 a = addr - bias;
++
++  out[0] = 0xF2;
++  out[1] = 9;
++  out[2] = 0;
++  out[3] = a;
++  out[4] = a >> 8;
++  out[5] = a >> 16;
++  out[6] = a >> 24;
++  out[7] = len;
++  out[8] = len >> 8;
++  out[9] = len >> 16;
++  out[10] = len >> 24;
++  out[11] = goodix_body_cksum (out, 11);
++}
++
++gboolean
++gx_mem_reply_parse (const guint8 *r, gsize n, guint8 *out, gsize len)
++{
++  gsize body;
++
++  if (n < 4 || r[0] != 0xF2)
++    return FALSE;
++  body = r[1] | (r[2] << 8);
++  if (body != len + 1 || n != body + 3)
++    return FALSE;
++  if (goodix_body_cksum (r, n - 1) != r[n - 1])
++    return FALSE;
++  memcpy (out, r + 3, len);
++  return TRUE;
++}
++
++/* 13010 FUN_08021da0: -(0xA5A5 + sum of the first 127 halfwords). */
++gboolean
++gx_config_valid (const guint8 *blk, gsize len)
++{
++  guint16 s = 0xA5A5;
++
++  if (len != 256)
++    return FALSE;
++  for (gsize i = 0; i < 254; i += 2)
++    s += blk[i] | (blk[i + 1] << 8);
++  return (guint16) -s == (blk[254] | (blk[255] << 8));
++}
++
++guint
++gx_views_keep (guint have, guint adding, guint cap)
++{
++  guint room = adding < cap ? cap - adding : 0;
++
++  return MIN (have, room);
++}
+diff --git a/libfprint/drivers/goodixtls/goodix_model.h b/libfprint/drivers/goodixtls/goodix_model.h
+new file mode 100644
+index 00000000..9691e56d
+--- /dev/null
++++ b/libfprint/drivers/goodixtls/goodix_model.h
+@@ -0,0 +1,97 @@
++/*
++ * Goodix SPI (TLS-PSK) sensors: per-model constants and protocol helpers
++ *
++ * Copyright (C) 2026 Matthias Gruss
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * Everything that differs between sensors lives in GxModel, keyed by the ACPI
++ * id AND the firmware version. A firmware not in the table gets no stage-B
++ * command at all (config upload, TLS, imaging): its key address and command
++ * handlers are unverified, and guessing could wedge or damage the sensor.
++ */
++
++#pragma once
++
++#include <glib.h>
++
++typedef struct
++{
++  const gchar  *acpi_id;
++  const gchar  *fw_version;
++  guint32       psk_addr;       /* where the firmware keeps the 48-byte PMK */
++  guint         psk_len;
++  guint32       mem_bias;       /* 0xF2 adds this to the address it is given */
++  const guint8 *config;         /* 0x90 block, checksum in its last 2 bytes */
++  gsize         config_len;
++  const gchar *const *capture_seq;  /* hex bodies, as captured on the wire */
++  guint         reset_line_default; /* gpiochip0 line when ACPI says nothing */
++  guint         reset_settle_ms;    /* wait after releasing reset */
++  gboolean      reset_from_dsdt;    /* line may be read out of the DSDT */
++  guint32       spi_hz;
++  gboolean      split_header;   /* frame header and body as two transfers */
++  guint         img_w, img_h;
++} GxModel;
++
++/* Exact match on both ids, or NULL. */
++const GxModel *gx_model_lookup (const gchar *acpi_id,
++                                const gchar *fw_version);
++
++/* Any entry for this ACPI id, or NULL. Only its transport fields (spi_hz,
++ * split_header, reset_*) may be used: they are what reading the firmware
++ * version needs, before gx_model_lookup can be asked. */
++const GxModel *gx_model_transport (const gchar *acpi_id);
++
++/* How many of @have existing template views may be kept next to @adding new
++ * ones without the template exceeding @cap views. */
++guint gx_views_keep (guint have, guint adding, guint cap);
++
++/* Frame and command checksums. */
++static inline guint8
++goodix_body_cksum (const guint8 *b, gsize n)
++{
++  guint8 s = 0;
++
++  while (n--)
++    s += *b++;
++  return (guint8) (0xAA - s);
++}
++
++void gx_frame_header (guint8  type,
++                      guint16 len,
++                      guint8  out[4]);
++
++/* Six bytes carry four interleaved 12-bit pixels. */
++void gx_decode_12bit (const guint8 *data,
++                      gsize         len,
++                      guint16      *out,
++                      gsize         n);
++
++/* Largest single transfer: the image record plus its TLS overhead. */
++#define GX_RX_MAX 24000
++
++/* Can spidev move GX_RX_MAX bytes in one transfer with this bufsiz? */
++gboolean gx_bufsiz_ok (guint bufsiz);
++
++/* 0xF2 memory read of @len bytes at @addr: twelve bytes into @out. */
++void gx_mem_read_cmd (guint32 addr,
++                      guint32 len,
++                      guint32 bias,
++                      guint8  out[12]);
++
++/* Checks a 0xF2 reply [f2][len16][data][ck] for command, length and checksum,
++ * and copies exactly @len data bytes. */
++gboolean gx_mem_reply_parse (const guint8 *r,
++                             gsize         n,
++                             guint8       *out,
++                             gsize         len);
++
++/* Is the 0x90 block's embedded checksum the one the firmware expects? A block
++ * that fails is refused by the sensor; never send one. */
++gboolean gx_config_valid (const guint8 *blk,
++                          gsize         len);
+diff --git a/libfprint/drivers/goodixtls/goodix_sift.c b/libfprint/drivers/goodixtls/goodix_sift.c
+new file mode 100644
+index 00000000..8a7632a3
+--- /dev/null
++++ b/libfprint/drivers/goodixtls/goodix_sift.c
+@@ -0,0 +1,569 @@
++/*
++ * Local descriptor extraction and matching for fingerprint images
++ *
++ * Copyright (C) 2026 Benjamin Allègre (https://github.com/Sigfrodr)
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#define _USE_MATH_DEFINES
++#define _GNU_SOURCE
++
++#include <math.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "goodix_sift.h"
++
++#ifndef RATIO
++#define RATIO 0.90              /* Lowe's ratio test */
++#endif
++#ifndef GEO_TOL
++#define GEO_TOL 6.0             /* geometric consistency tolerance, in pixels */
++#endif
++#define MIN_PAIRS 3
++
++/* ------------------------------------------------------------------ */
++/*  Helpers                                                            */
++/* ------------------------------------------------------------------ */
++
++/* Mean over a (2r+1)^2 window, via a summed-area table. */
++static void
++box_mean (const double *a, double *out, int w, int h, int r)
++{
++  int x, y;
++  g_autofree double *ii = g_malloc0 (sizeof (double) * (w + 1) * (h + 1));
++
++  for (y = 0; y < h; y++)
++    {
++      double row = 0;
++      for (x = 0; x < w; x++)
++        {
++          row += a[y * w + x];
++          ii[(y + 1) * (w + 1) + x + 1] = ii[y * (w + 1) + x + 1] + row;
++        }
++    }
++  for (y = 0; y < h; y++)
++    for (x = 0; x < w; x++)
++      {
++        int y0 = CLAMP (y - r, 0, h), y1 = CLAMP (y + r + 1, 0, h);
++        int x0 = CLAMP (x - r, 0, w), x1 = CLAMP (x + r + 1, 0, w);
++        double s = ii[y1 * (w + 1) + x1] - ii[y0 * (w + 1) + x1]
++                   - ii[y1 * (w + 1) + x0] + ii[y0 * (w + 1) + x0];
++        int n = (y1 - y0) * (x1 - x0);
++        out[y * w + x] = n ? s / n : 0.0;
++      }
++}
++
++/* Central differences. */
++static void
++gradients (const double *img, double *gx, double *gy, int w, int h)
++{
++  int x, y;
++
++  for (y = 0; y < h; y++)
++    for (x = 0; x < w; x++)
++      {
++        int xm = x > 0 ? x - 1 : x, xp = x < w - 1 ? x + 1 : x;
++        int ym = y > 0 ? y - 1 : y, yp = y < h - 1 ? y + 1 : y;
++        gx[y * w + x] = (img[y * w + xp] - img[y * w + xm]) * 0.5;
++        gy[y * w + x] = (img[yp * w + x] - img[ym * w + x]) * 0.5;
++      }
++}
++
++/* ------------------------------------------------------------------ */
++/*  Extraction                                                         */
++/* ------------------------------------------------------------------ */
++
++GxSiftFeatures *
++gx_sift_extract (const double *img, int w, int h)
++{
++  int n = w * h, i, x, y, k;
++  g_autofree double *gx = g_malloc0 (sizeof (double) * n);
++  g_autofree double *gy = g_malloc0 (sizeof (double) * n);
++  g_autofree double *vx = g_malloc0 (sizeof (double) * n);
++  g_autofree double *vy = g_malloc0 (sizeof (double) * n);
++  g_autofree double *smooth_x = g_malloc0 (sizeof (double) * n);
++  g_autofree double *smooth_y = g_malloc0 (sizeof (double) * n);
++  g_autofree double *mag = g_malloc0 (sizeof (double) * n);
++  g_autofree double *magm = g_malloc0 (sizeof (double) * n);
++  g_autofree double *theta = g_malloc0 (sizeof (double) * n);
++  g_autofree double *c2 = g_malloc0 (sizeof (double) * n);
++  g_autofree double *s2 = g_malloc0 (sizeof (double) * n);
++  g_autofree double *c2m = g_malloc0 (sizeof (double) * n);
++  g_autofree double *s2m = g_malloc0 (sizeof (double) * n);
++  g_autofree double *sal = g_malloc0 (sizeof (double) * n);
++  GxSiftFeatures *f;
++
++  gradients (img, gx, gy, w, h);
++  for (i = 0; i < n; i++)
++    {
++      vx[i] = gx[i] * gx[i] - gy[i] * gy[i];
++      vy[i] = 2.0 * gx[i] * gy[i];
++      mag[i] = hypot (gx[i], gy[i]);
++    }
++
++  /* Smoothed orientation field. */
++  box_mean (vx, smooth_x, w, h, 4);
++  box_mean (vy, smooth_y, w, h, 4);
++  for (i = 0; i < n; i++)
++    theta[i] = 0.5 * atan2 (smooth_y[i], smooth_x[i]);
++
++  /* Saliency: high where ridge orientation is INCOHERENT (the flow changes)
++   * and contrast is sufficient. That combination is what makes a location
++   * distinctive — ridges themselves look alike everywhere, so a detector keyed
++   * on ridge strength alone would fire on featureless areas. */
++  for (i = 0; i < n; i++)
++    {
++      c2[i] = cos (2 * theta[i]);
++      s2[i] = sin (2 * theta[i]);
++    }
++  box_mean (c2, c2m, w, h, 3);
++  box_mean (s2, s2m, w, h, 3);
++  box_mean (mag, magm, w, h, 3);
++  for (i = 0; i < n; i++)
++    {
++      double coh = hypot (c2m[i], s2m[i]);
++      sal[i] = (1.0 - coh) * magm[i];
++    }
++
++  /* Exclude the border: the descriptor needs its full window. */
++  {
++    int b = GX_SIFT_PATCH / 2 + 2;
++    for (y = 0; y < h; y++)
++      for (x = 0; x < w; x++)
++        if (y < b || y >= h - b || x < b || x >= w - b)
++          sal[y * w + x] = 0.0;
++  }
++
++  f = g_new0 (GxSiftFeatures, 1);
++  f->pts = g_new0 (GxSiftPoint, GX_SIFT_MAX_PTS);
++
++  /* Pick maxima, enforcing a minimum spacing. */
++  for (k = 0; k < GX_SIFT_MAX_PTS; k++)
++    {
++      int best = -1;
++      double bv = 0.0;
++
++      for (i = 0; i < n; i++)
++        if (sal[i] > bv)
++          {
++            bv = sal[i];
++            best = i;
++          }
++      if (best < 0)
++        break;
++      x = best % w;
++      y = best / w;
++      f->pts[f->n].x = x;
++      f->pts[f->n].y = y;
++      f->n++;
++      for (int yy = MAX (0, y - 6); yy < MIN (h, y + 7); yy++)
++        for (int xx = MAX (0, x - 6); xx < MIN (w, x + 7); xx++)
++          sal[yy * w + xx] = 0.0;
++    }
++
++  /* Descriptors. */
++  for (k = 0; k < (int) f->n; k++)
++    {
++      double hist[GX_SIFT_DIM] = { 0 };
++      double a = theta[f->pts[k].y * w + f->pts[k].x];
++      double ca = cos (-a), sa = sin (-a);
++      double half = GX_SIFT_PATCH / 2.0;
++      double step = (double) GX_SIFT_PATCH / GX_SIFT_CELLS;
++      double norm = 0.0;
++      int dx, dy;
++
++      for (dy = -GX_SIFT_PATCH / 2; dy < GX_SIFT_PATCH / 2; dy++)
++        for (dx = -GX_SIFT_PATCH / 2; dx < GX_SIFT_PATCH / 2; dx++)
++          {
++            double rx = dx * ca - dy * sa;
++            double ry = dx * sa + dy * ca;
++            int cx = (int) ((rx + half) / step);
++            int cy = (int) ((ry + half) / step);
++            int yy = f->pts[k].y + dy, xx = f->pts[k].x + dx;
++            double g, ang;
++            int b;
++
++            if (cx < 0 || cx >= GX_SIFT_CELLS || cy < 0 || cy >= GX_SIFT_CELLS)
++              continue;
++            if (yy < 0 || yy >= h || xx < 0 || xx >= w)
++              continue;
++            ang = atan2 (gy[yy * w + xx], gx[yy * w + xx]) - a;
++            g = fmod (ang, 2 * M_PI);
++            if (g < 0)
++              g += 2 * M_PI;
++            b = (int) (g / (2 * M_PI) * GX_SIFT_BINS) % GX_SIFT_BINS;
++            hist[(cy * GX_SIFT_CELLS + cx) * GX_SIFT_BINS + b] += mag[yy * w + xx];
++          }
++
++      /* L2 normalise, clip at 0.2, renormalise, square root (RootSIFT). */
++      for (i = 0; i < GX_SIFT_DIM; i++)
++        norm += hist[i] * hist[i];
++      norm = sqrt (norm);
++      if (norm < 1e-9)
++        {
++          memset (f->pts[k].desc, 0, GX_SIFT_DIM);
++          continue;
++        }
++      for (i = 0; i < GX_SIFT_DIM; i++)
++        hist[i] = MIN (hist[i] / norm, 0.2);
++      norm = 0.0;
++      for (i = 0; i < GX_SIFT_DIM; i++)
++        norm += hist[i] * hist[i];
++      norm = sqrt (norm) + 1e-9;
++      for (i = 0; i < GX_SIFT_DIM; i++)
++        {
++          double v = sqrt (hist[i] / norm);          /* RootSIFT */
++          f->pts[k].desc[i] = (guint8) CLAMP ((int) (v * 255.0), 0, 255);
++        }
++    }
++  return f;
++}
++
++void
++gx_sift_free (GxSiftFeatures *f)
++{
++  if (!f)
++    return;
++  g_free (f->pts);
++  g_free (f);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Matching                                                           */
++/* ------------------------------------------------------------------ */
++
++static double
++desc_dist2 (const guint8 *a, const guint8 *b)
++{
++  double s = 0;
++  int i;
++
++  for (i = 0; i < GX_SIFT_DIM; i++)
++    {
++      double d = (double) a[i] - b[i];
++      s += d * d;
++    }
++  return s;
++}
++
++int
++gx_sift_match_xform (const GxSiftFeatures *A, const GxSiftFeatures *B,
++                     guint8 *mask, int *out_tx, int *out_ty)
++{
++  int i, j, np = 0, best = 0;
++  double bt_x = 0, bt_y = 0;
++  g_autofree int *pi = NULL, *pj = NULL;
++
++  if (!A || !B || A->n < MIN_PAIRS || B->n < MIN_PAIRS)
++    return 0;
++  pi = g_new (int, A->n);
++  pj = g_new (int, A->n);
++
++  /* Nearest-neighbour matching with Lowe's ratio test.
++   *
++   * Mutual-consistency filtering (keeping only pairs that are each other's
++   * nearest neighbour) was tried and rejected: measured on recorded sets it
++   * drops genuine scores from 16 to 12 while impostor scores stay put. */
++  for (i = 0; i < (int) A->n; i++)
++    {
++      double d1 = 1e300, d2 = 1e300;
++      int jb = -1;
++
++      for (j = 0; j < (int) B->n; j++)
++        {
++          double d = desc_dist2 (A->pts[i].desc, B->pts[j].desc);
++          if (d < d1)
++            {
++              d2 = d1;
++              d1 = d;
++              jb = j;
++            }
++          else if (d < d2)
++            {
++              d2 = d;
++            }
++        }
++      if (jb >= 0 && d1 < RATIO * RATIO * d2)
++        {
++          pi[np] = i;
++          pj[np] = jb;
++          np++;
++        }
++    }
++  if (np < MIN_PAIRS)
++    return 0;
++
++  /* Geometric validation: vote on the implied translation. Widening GEO_TOL
++   * beyond 6 px was tried and rejected — it lifts impostor scores as much as
++   * genuine ones. */
++  for (i = 0; i < np; i++)
++    {
++      double tx = B->pts[pj[i]].x - A->pts[pi[i]].x;
++      double ty = B->pts[pj[i]].y - A->pts[pi[i]].y;
++      int cnt = 0;
++
++      for (j = 0; j < np; j++)
++        {
++          double ex = B->pts[pj[j]].x - A->pts[pi[j]].x - tx;
++          double ey = B->pts[pj[j]].y - A->pts[pi[j]].y - ty;
++          if (ex * ex + ey * ey <= GEO_TOL * GEO_TOL)
++            cnt++;
++        }
++      if (cnt > best)
++        {
++          best = cnt;
++          bt_x = tx;
++          bt_y = ty;
++        }
++    }
++
++  if (out_tx)
++    *out_tx = (int) bt_x;
++  if (out_ty)
++    *out_ty = (int) bt_y;
++
++  /* Flag the points of B belonging to the best cluster, so the caller can
++   * merge evidence across several template views. */
++  if (mask && best >= MIN_PAIRS)
++    {
++      for (j = 0; j < np; j++)
++        {
++          double ex = B->pts[pj[j]].x - A->pts[pi[j]].x - bt_x;
++          double ey = B->pts[pj[j]].y - A->pts[pi[j]].y - bt_y;
++          if (ex * ex + ey * ey <= GEO_TOL * GEO_TOL)
++            mask[pj[j]] = 1;
++        }
++    }
++  return best;
++}
++
++int
++gx_sift_match_mask (const GxSiftFeatures *A, const GxSiftFeatures *B,
++                    guint8 *mask)
++{
++  return gx_sift_match_xform (A, B, mask, NULL, NULL);
++}
++
++int
++gx_sift_match (const GxSiftFeatures *A, const GxSiftFeatures *B)
++{
++  return gx_sift_match_xform (A, B, NULL, NULL, NULL);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Serialisation                                                      */
++/* ------------------------------------------------------------------ */
++
++GByteArray *
++gx_sift_serialize (const GxSiftFeatures *f)
++{
++  GByteArray *a = g_byte_array_new ();
++  guint32 n = f ? f->n : 0;
++  guint i;
++
++  g_byte_array_append (a, (guint8 *) &n, sizeof n);
++  for (i = 0; i < n; i++)
++    {
++      g_byte_array_append (a, (guint8 *) &f->pts[i].x, sizeof (gint16));
++      g_byte_array_append (a, (guint8 *) &f->pts[i].y, sizeof (gint16));
++      g_byte_array_append (a, f->pts[i].desc, GX_SIFT_DIM);
++    }
++  return a;
++}
++
++GxSiftFeatures *
++gx_sift_deserialize (const guint8 *data, gsize len)
++{
++  GxSiftFeatures *f;
++  guint32 n;
++  gsize need;
++  guint i;
++  const guint8 *p = data;
++
++  if (len < sizeof (guint32))
++    return NULL;
++  memcpy (&n, p, sizeof n);
++  p += sizeof n;
++  need = sizeof (guint32) + (gsize) n * (2 * sizeof (gint16) + GX_SIFT_DIM);
++  if (n > 4096 || len < need)
++    return NULL;
++
++  f = g_new0 (GxSiftFeatures, 1);
++  f->n = n;
++  f->pts = g_new0 (GxSiftPoint, n ? n : 1);
++  for (i = 0; i < n; i++)
++    {
++      memcpy (&f->pts[i].x, p, sizeof (gint16));
++      p += sizeof (gint16);
++      memcpy (&f->pts[i].y, p, sizeof (gint16));
++      p += sizeof (gint16);
++      memcpy (f->pts[i].desc, p, GX_SIFT_DIM);
++      p += GX_SIFT_DIM;
++    }
++  return f;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Incremental registration (enrolment guidance)                      */
++/* ------------------------------------------------------------------ */
++
++/* Registration reuses matching itself: the translation of the best
++ * geometrically consistent cluster between two views IS their relative
++ * offset. Views that cannot be attached stay outside the island — that is
++ * intended, an enrolment may legitimately cover disjoint areas. */
++
++#define MERGE_MIN_PAIRS 6    /* demanding: a misplacement would corrupt the
++                                whole island */
++#define MERGE_DEDUP_PX 3     /* closer than this in the common frame means the
++                                same physical point */
++
++struct _GxSiftIsland
++{
++  GArray  *pts;                   /* GxSiftPoint, in the island's frame */
++  int      x0, y0, x1, y1;        /* current extent */
++  gboolean empty;
++};
++
++/* Merges @src, offset by (tx, ty), into @dst, dropping points that duplicate
++ * one already present.
++ *
++ * Deduplication is not a refinement, it is a requirement: two near-identical
++ * descriptors from the same physical point seen by two views are each other's
++ * nearest neighbour, which makes Lowe's ratio test reject the match outright.
++ * Without it, pooling views DEGRADES matching instead of improving it. */
++static void
++merge_points (GArray *dst, const GxSiftFeatures *src, int tx, int ty)
++{
++  guint i, j;
++
++  for (i = 0; i < src->n; i++)
++    {
++      GxSiftPoint p = src->pts[i];
++      gboolean dup = FALSE;
++
++      p.x = (gint16) (p.x + tx);
++      p.y = (gint16) (p.y + ty);
++
++      for (j = 0; j < dst->len && !dup; j++)
++        {
++          const GxSiftPoint *q = &g_array_index (dst, GxSiftPoint, j);
++          int dx = q->x - p.x, dy = q->y - p.y;
++          dup = (dx * dx + dy * dy) <= MERGE_DEDUP_PX * MERGE_DEDUP_PX;
++        }
++      if (!dup)
++        g_array_append_val (dst, p);
++    }
++}
++
++GxSiftIsland *
++gx_sift_island_new (void)
++{
++  GxSiftIsland *i = g_new0 (GxSiftIsland, 1);
++
++  i->pts = g_array_new (FALSE, FALSE, sizeof (GxSiftPoint));
++  i->empty = TRUE;
++  return i;
++}
++
++void
++gx_sift_island_free (GxSiftIsland *i)
++{
++  if (!i)
++    return;
++  g_array_free (i->pts, TRUE);
++  g_free (i);
++}
++
++static void
++island_bounds (GxSiftIsland *i)
++{
++  guint k;
++
++  if (!i->pts->len)
++    return;
++  i->x0 = i->x1 = g_array_index (i->pts, GxSiftPoint, 0).x;
++  i->y0 = i->y1 = g_array_index (i->pts, GxSiftPoint, 0).y;
++  for (k = 1; k < i->pts->len; k++)
++    {
++      const GxSiftPoint *p = &g_array_index (i->pts, GxSiftPoint, k);
++      i->x0 = MIN (i->x0, p->x);
++      i->x1 = MAX (i->x1, p->x);
++      i->y0 = MIN (i->y0, p->y);
++      i->y1 = MAX (i->y1, p->y);
++    }
++}
++
++gboolean
++gx_sift_island_add (GxSiftIsland *isl, const GxSiftFeatures *v,
++                    int *out_dx, int *out_dy, int *out_score)
++{
++  GxSiftFeatures cur;
++  int tx = 0, ty = 0, sc;
++
++  if (!isl || !v || !v->n)
++    return FALSE;
++
++  if (isl->empty)
++    {
++      merge_points (isl->pts, v, 0, 0);
++      isl->empty = FALSE;
++      island_bounds (isl);
++      if (out_dx)
++        *out_dx = 0;
++      if (out_dy)
++        *out_dy = 0;
++      if (out_score)
++        *out_score = (int) v->n;
++      return TRUE;
++    }
++
++  cur.n = isl->pts->len;
++  cur.pts = (GxSiftPoint *) isl->pts->data;
++  sc = gx_sift_match_xform (&cur, v, NULL, &tx, &ty);
++  if (out_score)
++    *out_score = sc;
++  if (sc < MERGE_MIN_PAIRS)
++    return FALSE;                 /* no usable overlap */
++
++  merge_points (isl->pts, v, -tx, -ty);
++  island_bounds (isl);
++  if (out_dx)
++    *out_dx = -tx;
++  if (out_dy)
++    *out_dy = -ty;
++  return TRUE;
++}
++
++void
++gx_sift_island_extent (GxSiftIsland *i, int *x0, int *y0, int *x1, int *y1,
++                       guint *npts)
++{
++  if (!i)
++    return;
++  if (x0)
++    *x0 = i->x0;
++  if (y0)
++    *y0 = i->y0;
++  if (x1)
++    *x1 = i->x1;
++  if (y1)
++    *y1 = i->y1;
++  if (npts)
++    *npts = i->pts->len;
++}
+diff --git a/libfprint/drivers/goodixtls/goodix_sift.h b/libfprint/drivers/goodixtls/goodix_sift.h
+new file mode 100644
+index 00000000..6b8dada4
+--- /dev/null
++++ b/libfprint/drivers/goodixtls/goodix_sift.h
+@@ -0,0 +1,139 @@
++/*
++ * Local descriptor extraction and matching for fingerprint images
++ *
++ * Copyright (C) 2026 Benjamin Allègre (https://github.com/Sigfrodr)
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/*
++ * Why this exists instead of NBIS: FpImageDevice mandates the NBIS pipeline
++ * (minutiae plus bozorth3), which this sensor cannot feed. Its 6x5 mm surface
++ * yields about 6 minutiae per capture where reliable matching needs 20 to 40,
++ * and the measured bozorth3 score was consistently zero. Enhancing ridges or
++ * upscaling does not help: the limit is sensor area, not image quality.
++ *
++ * So this is a local-descriptor matcher instead: keypoints are detected where
++ * the ridge orientation field is incoherent (ridges themselves look alike
++ * everywhere and discriminate nothing), described by a rotation-normalised
++ * RootSIFT descriptor, matched by L2 distance with Lowe's ratio test, then
++ * validated geometrically.
++ *
++ * These are standard published techniques (Lowe 2004; Arandjelović and
++ * Zisserman 2012). No vendor code is reused.
++ */
++
++#pragma once
++
++#include <glib.h>
++
++#define GX_SIFT_CELLS 4
++#define GX_SIFT_BINS 8
++#define GX_SIFT_DIM (GX_SIFT_CELLS * GX_SIFT_CELLS * GX_SIFT_BINS)      /* 128 */
++
++#ifndef GX_SIFT_PATCH
++#define GX_SIFT_PATCH 20        /* descriptor window side, in pixels */
++#endif
++
++#ifndef GX_SIFT_MAX_PTS
++/* Keypoints kept per image. Measured on recorded capture sets: raising this
++ * from 60 to 150 lifts the genuine score from 6.5 to 11.7 matches on average
++ * without lifting an impostor's. Beyond 150 the detector saturates: a 132x112
++ * image simply holds no more salient points. */
++#define GX_SIFT_MAX_PTS 150
++#endif
++
++/* 8-bit quantised descriptor: compact, and precise enough for matching. */
++typedef struct
++{
++  gint16 x, y;                        /* position within the image */
++  guint8 desc[GX_SIFT_DIM];           /* quantised RootSIFT descriptor */
++} GxSiftPoint;
++
++typedef struct
++{
++  guint        n;
++  GxSiftPoint *pts;
++} GxSiftFeatures;
++
++/* Extracts keypoints and descriptors from a greyscale image. Pixel values may
++ * be on any scale; only the structure matters. */
++GxSiftFeatures *gx_sift_extract (const double *img,
++                                 int           w,
++                                 int           h);
++
++void gx_sift_free (GxSiftFeatures *f);
++
++/* Number of geometrically consistent matches between two feature sets. This is
++ * the similarity score: above a threshold, both come from the same finger. */
++int gx_sift_match (const GxSiftFeatures *a,
++                   const GxSiftFeatures *b);
++
++/* Same, but also flags in @mask (sized b->n) the points of @b that matched
++ * consistently. Lets the caller accumulate evidence across several template
++ * views instead of keeping only the best view's score. */
++int gx_sift_match_mask (const GxSiftFeatures *a,
++                        const GxSiftFeatures *b,
++                        guint8               *mask);
++
++/* Same, and also reports the (b - a) translation of the best consistent
++ * cluster. This is what allows template views to be registered into a common
++ * frame. */
++int gx_sift_match_xform (const GxSiftFeatures *a,
++                         const GxSiftFeatures *b,
++                         guint8               *mask,
++                         int                  *out_tx,
++                         int                  *out_ty);
++
++/*
++ * Incremental registration, used to guide enrolment in real time.
++ *
++ * Enrolment views are independent images, each in its own frame. Registering
++ * each new view against the accumulated ones tells the user interface where on
++ * the finger the press landed and how much of the finger is covered so far,
++ * which is the dominant factor in recognition rate.
++ *
++ * Registration is incremental by necessity: rebuilding the whole mosaic on
++ * every press would be quadratic (about 900 view matches by the 15th press)
++ * and would stall the caller.
++ */
++typedef struct _GxSiftIsland GxSiftIsland;
++
++GxSiftIsland *gx_sift_island_new (void);
++void          gx_sift_island_free (GxSiftIsland *island);
++
++/* Registers @v against the island and merges it in. Returns FALSE when the
++ * view does not overlap the island enough to be placed safely, in which case
++ * the caller should ask for a press closer to the previous ones.
++ * @out_dx and @out_dy give the view's position in the island's frame. */
++gboolean gx_sift_island_add (GxSiftIsland         *island,
++                             const GxSiftFeatures *v,
++                             int                  *out_dx,
++                             int                  *out_dy,
++                             int                  *out_score);
++
++void gx_sift_island_extent (GxSiftIsland *island,
++                            int          *x0,
++                            int          *y0,
++                            int          *x1,
++                            int          *y1,
++                            guint        *npts);
++
++/* Compact serialisation, for storage inside an FpPrint. */
++GByteArray *gx_sift_serialize (const GxSiftFeatures *f);
++GxSiftFeatures *gx_sift_deserialize (const guint8 *data,
++                                     gsize         len);
+diff --git a/libfprint/drivers/goodixtls/goodix_tls.c b/libfprint/drivers/goodixtls/goodix_tls.c
+new file mode 100644
+index 00000000..f8ed5d24
+--- /dev/null
++++ b/libfprint/drivers/goodixtls/goodix_tls.c
+@@ -0,0 +1,410 @@
++/*
++ * TLS-PSK channel for the Goodix GXFP5187 sensor
++ *
++ * Copyright (C) 2026 Benjamin Allègre (https://github.com/Sigfrodr)
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <string.h>
++
++#include <openssl/ssl.h>
++#include <openssl/err.h>
++#include <openssl/hmac.h>
++#include <openssl/evp.h>
++#include <openssl/bio.h>
++
++#include "goodix_tls.h"
++
++/* TLS_PSK_WITH_AES_128_CBC_SHA256 key material. */
++#define MAC_KEY_LEN 32
++#define ENC_KEY_LEN 16
++#define IV_LEN 16
++#define MAC_LEN 32
++#define KEY_BLOCK_LEN (2 * MAC_KEY_LEN + 2 * ENC_KEY_LEN)
++
++struct _GxTls
++{
++  SSL_CTX    *ctx;
++  SSL        *ssl;
++  BIO_METHOD *biom;
++
++  GxTlsSend   send;
++  GxTlsRecv   recv;
++  gpointer    user;
++
++  guint8      psk[64];
++  gsize       psk_len;
++  gchar      *identity;
++
++  /* Derived once the handshake completes. The sensor is the client, so its
++   * records are protected with the client_write_* material. */
++  guint8   client_mac[MAC_KEY_LEN];
++  guint8   client_key[ENC_KEY_LEN];
++  guint8   server_mac[MAC_KEY_LEN];
++  guint8   server_key[ENC_KEY_LEN];
++  guint64  read_seq;
++  gboolean keys_ready;
++};
++
++/* ------------------------------------------------------------------ */
++/*  Transport glue                                                     */
++/* ------------------------------------------------------------------ */
++
++static int
++bio_write_cb (BIO *b, const char *buf, int len)
++{
++  GxTls *t = BIO_get_data (b);
++  int r = t->send (t->user, (const guint8 *) buf, len);
++
++  BIO_clear_retry_flags (b);
++  return r > 0 ? r : -1;
++}
++
++static int
++bio_read_cb (BIO *b, char *buf, int len)
++{
++  GxTls *t = BIO_get_data (b);
++  int r = t->recv (t->user, (guint8 *) buf, len);
++
++  BIO_clear_retry_flags (b);
++  return r > 0 ? r : -1;
++}
++
++static long
++bio_ctrl_cb (BIO *b, int cmd, long num, void *ptr)
++{
++  return cmd == BIO_CTRL_FLUSH ? 1 : 0;
++}
++
++static int
++bio_create_cb (BIO *b)
++{
++  BIO_set_init (b, 1);
++  return 1;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Key derivation (TLS 1.2 PRF with SHA-256)                          */
++/* ------------------------------------------------------------------ */
++
++/* P_hash from RFC 5246 section 5: A(0) = seed, A(i) = HMAC(secret, A(i-1)),
++ * output = HMAC(secret, A(1) || seed) || HMAC(secret, A(2) || seed) || ... */
++static void
++tls_prf (const guint8 *secret, gsize secret_len,
++         const gchar *label, const guint8 *seed, gsize seed_len,
++         guint8 *out, gsize out_len)
++{
++  gsize label_len = strlen (label);
++  g_autofree guint8 *ls = g_malloc (label_len + seed_len);
++  guint8 a[EVP_MAX_MD_SIZE];
++  unsigned int a_len = 0;
++  gsize done = 0;
++
++  memcpy (ls, label, label_len);
++  memcpy (ls + label_len, seed, seed_len);
++
++  /* A(1) */
++  HMAC (EVP_sha256 (), secret, secret_len, ls, label_len + seed_len, a, &a_len);
++
++  while (done < out_len)
++    {
++      guint8 block[EVP_MAX_MD_SIZE];
++      unsigned int block_len = 0;
++      g_autofree guint8 *tmp = g_malloc (a_len + label_len + seed_len);
++      gsize take;
++
++      memcpy (tmp, a, a_len);
++      memcpy (tmp + a_len, ls, label_len + seed_len);
++      HMAC (EVP_sha256 (), secret, secret_len, tmp,
++            a_len + label_len + seed_len, block, &block_len);
++
++      take = MIN (block_len, out_len - done);
++      memcpy (out + done, block, take);
++      done += take;
++
++      /* A(i+1) = HMAC(secret, A(i)) */
++      HMAC (EVP_sha256 (), secret, secret_len, a, a_len, a, &a_len);
++    }
++}
++
++static gboolean
++derive_keys (GxTls *t, GError **error)
++{
++  SSL_SESSION *sess = SSL_get_session (t->ssl);
++  guint8 master[48], cr[32], sr[32], seed[64], kb[KEY_BLOCK_LEN];
++  gsize n;
++
++  if (!sess)
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "no TLS session");
++      return FALSE;
++    }
++  n = SSL_SESSION_get_master_key (sess, master, sizeof master);
++  if (n != sizeof master)
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                   "unexpected master secret length %zu", n);
++      return FALSE;
++    }
++  if (SSL_get_client_random (t->ssl, cr, sizeof cr) != sizeof cr ||
++      SSL_get_server_random (t->ssl, sr, sizeof sr) != sizeof sr)
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "cannot read randoms");
++      return FALSE;
++    }
++
++  /* key_block = PRF(master_secret, "key expansion",
++   *                 server_random + client_random)  — note the order. */
++  memcpy (seed, sr, 32);
++  memcpy (seed + 32, cr, 32);
++  tls_prf (master, sizeof master, "key expansion", seed, sizeof seed,
++           kb, sizeof kb);
++
++  memcpy (t->client_mac, kb, MAC_KEY_LEN);
++  memcpy (t->server_mac, kb + MAC_KEY_LEN, MAC_KEY_LEN);
++  memcpy (t->client_key, kb + 2 * MAC_KEY_LEN, ENC_KEY_LEN);
++  memcpy (t->server_key, kb + 2 * MAC_KEY_LEN + ENC_KEY_LEN, ENC_KEY_LEN);
++
++  /* Sequence numbers restart at zero when the cipher state changes, and the
++   * Finished message is the first record under the new keys. Application data
++   * from the sensor therefore starts at 1. The MAC check below will tell us
++   * loudly if that assumption ever stops holding. */
++  t->read_seq = 1;
++  t->keys_ready = TRUE;
++
++  OPENSSL_cleanse (master, sizeof master);
++  OPENSSL_cleanse (kb, sizeof kb);
++  return TRUE;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Handshake                                                          */
++/* ------------------------------------------------------------------ */
++
++static unsigned int
++psk_server_cb (SSL *ssl, const char *identity, unsigned char *psk,
++               unsigned int max_psk_len)
++{
++  GxTls *t = SSL_get_ex_data (ssl, 0);
++
++  if (!t || t->psk_len > max_psk_len)
++    return 0;
++  memcpy (psk, t->psk, t->psk_len);
++  return (unsigned int) t->psk_len;
++}
++
++GxTls *
++gx_tls_new (const guint8 *psk, gsize psk_len, const gchar *identity,
++            GxTlsSend send, GxTlsRecv recv, gpointer user)
++{
++  GxTls *t;
++
++  if (!psk || psk_len == 0 || psk_len > sizeof t->psk)
++    return NULL;
++
++  t = g_new0 (GxTls, 1);
++  memcpy (t->psk, psk, psk_len);
++  t->psk_len = psk_len;
++  t->identity = g_strdup (identity);
++  t->send = send;
++  t->recv = recv;
++  t->user = user;
++  return t;
++}
++
++gboolean
++gx_tls_handshake_run (GxTls *t, GError **error)
++{
++  BIO *bio;
++  int r;
++
++  t->ctx = SSL_CTX_new (TLS_server_method ());
++  if (!t->ctx)
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "SSL_CTX_new failed");
++      return FALSE;
++    }
++
++  /* The sensor only speaks TLS 1.2 with a PSK CBC suite. Those are below
++   * OpenSSL's default security level, hence SECLEVEL=0 — appropriate here,
++   * where the cipher choice is the peer's and not ours to improve. */
++  SSL_CTX_set_min_proto_version (t->ctx, TLS1_2_VERSION);
++  SSL_CTX_set_max_proto_version (t->ctx, TLS1_2_VERSION);
++  if (!SSL_CTX_set_cipher_list (t->ctx, "PSK-AES128-CBC-SHA256:@SECLEVEL=0"))
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                   "PSK-AES128-CBC-SHA256 unavailable in this OpenSSL build");
++      return FALSE;
++    }
++  SSL_CTX_set_psk_server_callback (t->ctx, psk_server_cb);
++  if (t->identity)
++    SSL_CTX_use_psk_identity_hint (t->ctx, t->identity);
++
++  t->ssl = SSL_new (t->ctx);
++  if (!t->ssl)
++    {
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED, "SSL_new failed");
++      return FALSE;
++    }
++  SSL_set_ex_data (t->ssl, 0, t);
++
++  t->biom = BIO_meth_new (BIO_get_new_index () | BIO_TYPE_SOURCE_SINK,
++                          "goodix-spi");
++  BIO_meth_set_write (t->biom, bio_write_cb);
++  BIO_meth_set_read (t->biom, bio_read_cb);
++  BIO_meth_set_ctrl (t->biom, bio_ctrl_cb);
++  BIO_meth_set_create (t->biom, bio_create_cb);
++
++  bio = BIO_new (t->biom);
++  BIO_set_data (bio, t);
++  SSL_set_bio (t->ssl, bio, bio);          /* SSL takes ownership */
++
++  r = SSL_accept (t->ssl);
++  if (r != 1)
++    {
++      unsigned long e = ERR_get_error ();
++      char buf[256] = "";
++
++      if (e)
++        ERR_error_string_n (e, buf, sizeof buf);
++      g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
++                   "TLS handshake failed (%d/%d) %s", r,
++                   SSL_get_error (t->ssl, r), buf);
++      return FALSE;
++    }
++  return derive_keys (t, error);
++}
++
++const gchar *
++gx_tls_ciphersuite (GxTls *t)
++{
++  return t && t->ssl ? SSL_get_cipher (t->ssl) : "none";
++}
++
++gboolean
++gx_tls_write (GxTls *t, const guint8 *buf, gsize len)
++{
++  return t && t->ssl && SSL_write (t->ssl, buf, (int) len) == (int) len;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Record decryption                                                  */
++/* ------------------------------------------------------------------ */
++
++gssize
++gx_tls_decrypt_record (GxTls *t, const guint8 *raw, gsize raw_len,
++                       guint8 *out, gsize out_cap)
++{
++  EVP_CIPHER_CTX *c;
++  const guint8 *body;
++  gsize body_len;
++  int plain_len = 0, tmp = 0;
++  g_autofree guint8 *plain = NULL;
++  guint8 mac[MAC_LEN], want[EVP_MAX_MD_SIZE], hdr[13];
++  unsigned int want_len = 0;
++  gsize content_len, pad;
++
++  if (!t || !t->keys_ready || raw_len < 5 + IV_LEN + MAC_LEN)
++    return -1;
++  if (raw[0] != 23)                         /* application data */
++    return -1;
++
++  body = raw + 5;
++  body_len = ((gsize) raw[3] << 8) | raw[4];
++  if (body_len + 5 > raw_len || body_len < IV_LEN + MAC_LEN ||
++      (body_len - IV_LEN) % IV_LEN != 0)
++    return -1;
++
++  /* AES-128-CBC, explicit IV in front of the ciphertext (TLS 1.2). */
++  plain = g_malloc (body_len);
++  c = EVP_CIPHER_CTX_new ();
++  if (!c)
++    return -1;
++  EVP_DecryptInit_ex (c, EVP_aes_128_cbc (), NULL, t->client_key, body);
++  EVP_CIPHER_CTX_set_padding (c, 0);        /* TLS padding, not PKCS#7 */
++  if (!EVP_DecryptUpdate (c, plain, &plain_len, body + IV_LEN,
++                          (int) (body_len - IV_LEN)) ||
++      !EVP_DecryptFinal_ex (c, plain + plain_len, &tmp))
++    {
++      EVP_CIPHER_CTX_free (c);
++      return -1;
++    }
++  EVP_CIPHER_CTX_free (c);
++  plain_len += tmp;
++
++  /* plaintext = content || MAC || padding, where every padding byte carries
++   * the padding length and the final byte is that length. */
++  pad = (gsize) plain[plain_len - 1] + 1;
++  if ((gsize) plain_len < pad + MAC_LEN)
++    return -1;
++  content_len = (gsize) plain_len - pad - MAC_LEN;
++  if (content_len > out_cap)
++    return -1;
++  memcpy (mac, plain + content_len, MAC_LEN);
++
++  /* MAC covers seq_num || type || version || length || content. Verifying it
++   * also confirms the sequence number is in step; a mismatch here is the loud
++   * failure that would otherwise show up as silently corrupt images. */
++  for (int i = 0; i < 8; i++)
++    hdr[i] = (guint8) (t->read_seq >> (56 - 8 * i));
++  hdr[8] = raw[0];
++  hdr[9] = raw[1];
++  hdr[10] = raw[2];
++  hdr[11] = (guint8) (content_len >> 8);
++  hdr[12] = (guint8) content_len;
++
++  {
++    g_autofree guint8 *msg = g_malloc (sizeof hdr + content_len);
++
++    memcpy (msg, hdr, sizeof hdr);
++    memcpy (msg + sizeof hdr, plain, content_len);
++    HMAC (EVP_sha256 (), t->client_mac, MAC_KEY_LEN, msg,
++          sizeof hdr + content_len, want, &want_len);
++  }
++  if (want_len != MAC_LEN || CRYPTO_memcmp (want, mac, MAC_LEN) != 0)
++    return -1;
++
++  memcpy (out, plain, content_len);
++  t->read_seq++;
++  return (gssize) content_len;
++}
++
++void
++gx_tls_close (GxTls *t)
++{
++  if (t && t->ssl)
++    SSL_shutdown (t->ssl);
++}
++
++void
++gx_tls_free (GxTls *t)
++{
++  if (!t)
++    return;
++  if (t->ssl)
++    SSL_free (t->ssl);                      /* frees the BIO too */
++  if (t->ctx)
++    SSL_CTX_free (t->ctx);
++  if (t->biom)
++    BIO_meth_free (t->biom);
++  OPENSSL_cleanse (t->psk, sizeof t->psk);
++  OPENSSL_cleanse (t->client_key, sizeof t->client_key);
++  OPENSSL_cleanse (t->client_mac, sizeof t->client_mac);
++  g_free (t->identity);
++  g_free (t);
++}
+diff --git a/libfprint/drivers/goodixtls/goodix_tls.h b/libfprint/drivers/goodixtls/goodix_tls.h
+new file mode 100644
+index 00000000..02405474
+--- /dev/null
++++ b/libfprint/drivers/goodixtls/goodix_tls.h
+@@ -0,0 +1,96 @@
++/*
++ * TLS-PSK channel for the Goodix GXFP5187 sensor
++ *
++ * Copyright (C) 2026 Benjamin Allègre (https://github.com/Sigfrodr)
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++/*
++ * The sensor speaks TLS 1.2 with TLS_PSK_WITH_AES_128_CBC_SHA256, and — with
++ * the roles reversed from what one might expect — it is the CLIENT while the
++ * host is the server.
++ *
++ * It also departs from the spec in one way that matters: it sends the whole
++ * fingerprint image in a SINGLE record of about 22 kB, against the 16384-byte
++ * plaintext ceiling TLS sets. Verified by walking the record headers on the
++ * wire (type=17 version=0303 length=22240). Nothing on the receiving side can
++ * change that: in TLS the sender alone decides how to fragment, and the only
++ * standard lever — the max_fragment_length extension of RFC 6066 — is offered
++ * by the client, which here is the sensor.
++ *
++ * Every compliant TLS library therefore refuses to read that record. Rather
++ * than ship a patched crypto library, which no distribution would package and
++ * no upstream would accept, this module lets a stock OpenSSL perform the
++ * handshake and the (small) writes, then derives the connection keys from the
++ * negotiated master secret and decrypts the oversized record itself.
++ *
++ * A note on what this does and does not protect: the channel provides no
++ * security to the host. The pre-shared key is read out of the sensor's own RAM
++ * over the same SPI bus, so anyone able to talk to the sensor can obtain it.
++ * This is vendor obfuscation, not a trust boundary — which is also why
++ * handling the record layer here is not the hazard it would normally be.
++ */
++
++#pragma once
++
++#include <gio/gio.h>
++
++typedef struct _GxTls GxTls;
++
++/* Transport hooks: both must block until they have moved some bytes, and
++ * return the count, or a negative value on failure. */
++typedef int (*GxTlsSend) (gpointer      user,
++                          const guint8 *buf,
++                          gsize         len);
++typedef int (*GxTlsRecv) (gpointer user,
++                          guint8  *buf,
++                          gsize    cap);
++
++GxTls *gx_tls_new (const guint8 *psk,
++                   gsize         psk_len,
++                   const gchar  *identity,
++                   GxTlsSend     send,
++                   GxTlsRecv     recv,
++                   gpointer      user);
++void   gx_tls_free (GxTls *tls);
++
++/* Runs the server side of the handshake and derives the connection keys.
++ * Returns FALSE and sets @error on failure. */
++gboolean gx_tls_handshake_run (GxTls   *tls,
++                               GError **error);
++
++/* Name of the negotiated ciphersuite, for logging. */
++const gchar *gx_tls_ciphersuite (GxTls *tls);
++
++/* Sends application data. Small commands only; goes through OpenSSL. */
++gboolean gx_tls_write (GxTls        *tls,
++                       const guint8 *buf,
++                       gsize         len);
++
++/* Reads ONE application-data record and decrypts it into @out.
++ *
++ * This deliberately bypasses OpenSSL, which would reject the oversized image
++ * record. @raw is the record exactly as it came off the wire, header included.
++ * Returns the plaintext length, or -1 on failure. */
++gssize gx_tls_decrypt_record (GxTls        *tls,
++                              const guint8 *raw,
++                              gsize         raw_len,
++                              guint8       *out,
++                              gsize         out_cap);
++
++void gx_tls_close (GxTls *tls);
+diff --git a/libfprint/drivers/goodixtls/goodixtls.c b/libfprint/drivers/goodixtls/goodixtls.c
+new file mode 100644
+index 00000000..99046662
+--- /dev/null
++++ b/libfprint/drivers/goodixtls/goodixtls.c
+@@ -0,0 +1,2641 @@
++/*
++ * Goodix GXFP5187/GXFP5197 SPI (TLS-PSK) driver for libfprint
++ *
++ * Copyright (C) 2026 Benjamin Allègre (https://github.com/Sigfrodr)
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * Driver for the SPI fingerprint sensor found in the Huawei MateBook X Pro,
++ * whose protocol was reverse-engineered for this work. The chain is: SPI
++ * dialogue where one frame must be exactly one transfer, opening the command
++ * gate by uploading a configuration blob, a TLS-PSK channel whose key is read
++ * out of the sensor's own RAM, and a 132x112 image in packed 12-bit samples
++ * (six bytes carry four interleaved pixels) calibrated by subtracting a
++ * background frame.
++ *
++ * GXFP5197 support (Huawei MateBook D, VLT-W50) and the per-model table:
++ * Copyright (C) 2026 Matthias Gruss
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, see <https://www.gnu.org/licenses/>.
++ */
++
++#define FP_COMPONENT "goodixtls"
++
++#include <errno.h>
++#include <glib/gstdio.h>
++#include <fcntl.h>
++#include <math.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <time.h>
++#include <string.h>
++#include <unistd.h>
++#include <sys/file.h>
++#include <sys/ioctl.h>
++#include <linux/spi/spidev.h>
++#include <linux/gpio.h>
++
++#include "goodixtls.h"
++#include "goodix_sift.h"
++#include "goodix_tls.h"
++
++/* Frames averaged for background and finger: a noise/latency trade-off. */
++#define GOODIX_BG_FRAMES 1
++#define GOODIX_FINGER_FRAMES 3
++/* Finger detection threshold on the standard deviation of the
++ * background-minus-frame difference. */
++#define GOODIX_FINGER_STD 150.0
++
++struct _FpiDeviceGoodixTls
++{
++  FpDevice parent;
++
++  int      spi_fd;
++  FpiSsm  *task_ssm;
++
++  /* Transport is known from the ACPI id; model only once the firmware
++   * version matched an entry. No stage-B command is sent before that. */
++  const GxModel *transport;
++  const GxModel *model;
++
++  /* TLS stack. Note the sensor is the client and we are the server. */
++  GxTls   *tls;
++  gboolean tls_up;
++
++  guint8   psk[GOODIX_PSK_LEN];
++
++  /* Reassembly buffer for TLS records, drained by the BIO recv callback. */
++  guint8     tls_rx[GX_RX_MAX];
++  int        tls_rxlen, tls_rxpos;
++
++  guint16   *bg_frame;       /* averaged background, NULL until calibrated */
++  guint      poll_id;        /* finger-detection timeout source */
++  int        poll_count;     /* poll iterations, bounded to avoid hanging */
++  GPtrArray *enroll_feats;   /* descriptor sets accumulated during enrolment */
++  int        fdt_base[12];   /* FDT baseline (finger absent) */
++  gboolean   have_fdt;       /* is fdt_base populated? */
++  int        fdt_abs;        /* per-unit absolute floor, derived from baseline */
++  int        timing_scale;   /* protocol-delay multiplier in %, grows on desync */
++  int        timing_saved;   /* last value persisted to disk, to avoid rewrites */
++  int        timing_clean;   /* consecutive sessions without a capture failure */
++  gboolean   capture_failed; /* a capture failed during this open */
++  gboolean   handshaking;    /* in the TLS handshake: short receive budget */
++  int        fdt_known;      /* persisted idle FDT mean, 0 if none yet */
++  gboolean   worker_active;   /* a work thread is running; close must wait */
++  gboolean   close_pending;   /* close was asked while a worker ran; do it after */
++  gboolean   bg_dirty;       /* background taken with a finger down */
++  guint8     reply[64];      /* the firmware's own reply to the last drain */
++  int        reply_len;
++};
++
++G_DECLARE_FINAL_TYPE (FpiDeviceGoodixTls, fpi_device_goodixtls, FPI,
++                      DEVICE_GOODIXTLS, FpDevice)
++G_DEFINE_TYPE (FpiDeviceGoodixTls, fpi_device_goodixtls, FP_TYPE_DEVICE)
++
++/* driver_data indexes this, so open knows which ACPI id it was bound for. */
++static const gchar *const gx_acpi_ids[] = { "GXFP5187", "GXFP5197" };
++
++static const FpIdEntry goodixtls_id_table[] = {
++  { .udev_types = FPI_DEVICE_UDEV_SUBTYPE_SPIDEV, .spi_acpi_id = "GXFP5187",
++    .driver_data = 0 },
++  { .udev_types = FPI_DEVICE_UDEV_SUBTYPE_SPIDEV, .spi_acpi_id = "GXFP5197",
++    .driver_data = 1 },
++  { .udev_types = 0 }
++};
++
++/* Fixed startup commands, byte-for-byte as validated against the sensor. */
++static const guint8 GX_AMORCE[] = { 0, 5, 0, 0, 0, 0, 0, 0x88 };
++static const guint8 GX_ENABLE[] = { 0x96, 0x03, 0x00, 0x01, 0x00, 0x10 };
++static const guint8 GX_REQTLS[] = { 0xd0, 0x03, 0x00, 0x00, 0x00, 0xd7 };
++
++/* ------------------------------------------------------------------ */
++/*  SPI transport: one frame is exactly one transfer                   */
++/* ------------------------------------------------------------------ */
++
++/* GOODIXTLS_TRACE=1 logs every transfer with a monotonic timestamp, in the
++ * same format as the Python probe's GXPROBE_TRACE, so the two can be diffed. */
++static void
++gx_xtrace (const char *dir, const guint8 *b, gsize n)
++{
++  static int on = -1;
++  g_autofree gchar *hex = NULL;
++
++  if (on < 0)
++    on = g_getenv ("GOODIXTLS_TRACE") != NULL;
++  if (!on)
++    return;
++  hex = g_strnfill (2 * MIN (n, 48), '0');
++  for (gsize i = 0; i < MIN (n, 48); i++)
++    g_snprintf (hex + 2 * i, 3, "%02x", b[i]);
++  g_printerr ("xfer %.6f %s %5zu %s\n", g_get_monotonic_time () / 1e6, dir, n, hex);
++}
++
++
++static gboolean
++gx_write_frame (FpiDeviceGoodixTls *self, guint8 type,
++                const guint8 *body, gsize n)
++{
++  g_autofree guint8 *buf = g_malloc (n + 4);
++  struct spi_ioc_transfer xfer = { 0 };
++
++  gx_frame_header (type, n, buf);
++  memcpy (buf + 4, body, n);
++
++  /* The GXFP5197 firmware receives the 4-byte header and the body by separate
++   * DMA transfers, and stays silent when both come in one (gfspi.dll
++   * 1.1.13.x does the same: header, Sleep(2), body). */
++  if (self->transport->split_header)
++    {
++      xfer.tx_buf = (unsigned long) buf;
++      xfer.len = 4;
++      if (ioctl (self->spi_fd, SPI_IOC_MESSAGE (1), &xfer) < 1)
++        return FALSE;
++      gx_xtrace ("W", buf, 4);
++      g_usleep (2000);
++      xfer.tx_buf = (unsigned long) (buf + 4);
++      xfer.len = n;
++      gx_xtrace ("W", buf + 4, n);
++      return ioctl (self->spi_fd, SPI_IOC_MESSAGE (1), &xfer) >= 1;
++    }
++  xfer.tx_buf = (unsigned long) buf;
++  xfer.len = n + 4;
++  return ioctl (self->spi_fd, SPI_IOC_MESSAGE (1), &xfer) >= 1;
++}
++
++/* Reads one frame: a 4-byte header then the body. Returns the body length,
++ * or -1 on failure. */
++static int
++gx_read_frame (FpiDeviceGoodixTls *self, guint8 *out_type,
++               guint8 *rx, gsize rx_cap)
++{
++  guint8 hdr[4] = { 0 };
++  struct spi_ioc_transfer xh = { 0 }, xb = { 0 };
++  guint16 n;
++
++  xh.rx_buf = (unsigned long) hdr;
++  xh.len = 4;
++  if (ioctl (self->spi_fd, SPI_IOC_MESSAGE (1), &xh) < 1)
++    return -1;
++  gx_xtrace ("R", hdr, 4);
++  if (hdr[0] != GOODIX_PKT_PLAIN && hdr[0] != GOODIX_PKT_TLS)
++    return -1;
++  *out_type = hdr[0];
++  n = hdr[1] | (hdr[2] << 8);
++  if (n == 0 || n > rx_cap)
++    {
++      if (n)
++        fp_warn ("frame of %u bytes does not fit %zu: body left unread", n, rx_cap);
++      return -1;
++    }
++
++  g_usleep (200);                    /* let the sensor stage the body */
++  xb.rx_buf = (unsigned long) rx;
++  xb.len = n;
++  if (ioctl (self->spi_fd, SPI_IOC_MESSAGE (1), &xb) < 1)
++    return -1;
++  gx_xtrace ("R", rx, n);
++  return n;
++}
++
++/* Sends the preamble (A0), then a plaintext command (A0). */
++static gboolean
++gx_send_plain_raw (FpiDeviceGoodixTls *self, const guint8 *body, gsize n)
++{
++  if (!gx_write_frame (self, GOODIX_PKT_PLAIN, GX_AMORCE, sizeof GX_AMORCE))
++    return FALSE;
++  g_usleep (8000);
++  return gx_write_frame (self, GOODIX_PKT_PLAIN, body, n);
++}
++
++/* Sends a cleartext command and drains every plain response. A TLS record
++ * arriving instead is stashed for the BIO layer to pick up. */
++static void
++gx_send_plain_drain (FpiDeviceGoodixTls *self, const guint8 *body, gsize n)
++{
++/* Empty reads, 10 ms apart, that count as silence after a response. This is
++ * the dominant cost of a capture: each of the nine commands in the sequence
++ * pays it. Cut it too short and frame boundaries desynchronise, leaving the
++ * sensor wedged in a state only a hard reset plus an spidev rebind recovers.
++ *
++ * Measured over 6 to 8 captures per setting:
++ *   6 -> 1319 ms, no failures       (original value)
++ *   4 -> 1136 ms, no failures       <- kept
++ *   3 -> 1062 ms, no failures
++ *   2 -> total failure, sensor wedged
++ * We keep 4 rather than 3: shipping the value right next to the cliff would
++ * leave no margin for load or temperature variation. */
++#ifndef GX_DRAIN_SILENCE
++#define GX_DRAIN_SILENCE 4
++#endif
++
++  static guint8 scratch[GX_RX_MAX];
++  guint8 ty;
++  int r, got = 0, i, misses = 0;
++
++  self->reply_len = 0;
++  gx_send_plain_raw (self, body, n);
++  g_usleep (15000);
++  /* Read until a sustained silence. Some responses — the 4765-byte navigation
++   * payload, the image — arrive after a delay, and giving up early leaves the
++   * next read misaligned. */
++  for (i = 0; i < 120; i++)
++    {
++      r = gx_read_frame (self, &ty, scratch, sizeof scratch);
++      if (r > 0 && ty == GOODIX_PKT_PLAIN)   /* cleartext reply: keep draining */
++        {
++          if (scratch[0] == body[0] && r >= 4 && r <= (int) sizeof self->reply)
++            {
++              memcpy (self->reply, scratch, r);
++              self->reply_len = r;
++            }
++          got++;
++          misses = 0;
++          g_usleep (5000);
++          continue;
++        }
++      if (r > 0 && ty == GOODIX_PKT_TLS)     /* record TLS : stocke pour le BIO */
++        {
++          memcpy (self->tls_rx, scratch, r);
++          self->tls_rxlen = r;
++          self->tls_rxpos = 0;
++          fp_dbg ("drain cmd=%02x -> stashed TLS record, %d bytes", body[0], r);
++          break;
++        }
++      misses++;
++      g_usleep (10000);
++      if (got && misses >= GX_DRAIN_SILENCE)  /* silence after a reply */
++        break;
++      if (!got && misses >= 25)              /* nothing at all after ~250 ms */
++        break;
++    }
++  fp_dbg ("drain cmd=%02x: %d cleartext reply/replies", body[0], got);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Transport glue: TLS records travel inside 0xB0 SPI frames          */
++/* ------------------------------------------------------------------ */
++
++#define GX_RECORD_GAP_US 5000
++
++static int
++gx_bio_send (gpointer ctx, const guint8 *b, gsize l)
++{
++  FpiDeviceGoodixTls *self = ctx;
++
++  gsize off = 0, prev = 0;
++
++  /* One TLS record per 0xB0 frame. OpenSSL batches several records into a
++   * single write — the ServerHello group comes out as one 121-byte call — but
++   * the sensor expects exactly one record per frame and silently ignores a
++   * frame carrying two. Split on the record headers rather than forwarding the
++   * buffer as it arrives. */
++  while (off + 5 <= l)
++    {
++      gsize rec = 5 + (((gsize) b[off + 3] << 8) | b[off + 4]);
++
++      if (off + rec > l)
++        break;                        /* partial record: should not happen */
++      /* Space out consecutive handshake records (ServerHello, key exchange
++       * hint, ServerHelloDone). Written back to back, within a millisecond,
++       * the sensor missed the flight about half the time and never answered:
++       * first handshakes connected 9 times in 25. With 5 ms between them, 19
++       * in 20 (the Windows driver also paces its SPI writes). The final
++       * ChangeCipherSpec + Finished pair must NOT be split: spaced, the
++       * handshake completed but the sensor never delivered an image. */
++      if (off > 0 && b[off] == 0x16 && b[prev] == 0x16)
++        g_usleep (GX_RECORD_GAP_US);
++      prev = off;
++      if (!gx_write_frame (self, GOODIX_PKT_TLS, b + off, rec))
++        return -1;
++      off += rec;
++    }
++  return (int) l;
++}
++
++/* Receive budget during the handshake, in 20 ms polls. Its records arrive
++ * within one or two polls when the sensor answers at all; when it does not,
++ * the full 4 s budget only delayed the retry that does connect. */
++#define GX_HS_POLLS 50
++
++static int
++gx_bio_recv (gpointer ctx, guint8 *b, gsize l)
++{
++  FpiDeviceGoodixTls *self = ctx;
++  int avail, take, i;
++  guint8 ty;
++
++  if (self->tls_rxpos >= self->tls_rxlen)
++    {
++      /* Buffer empty: pull fresh TLS frames, skipping cleartext ones. The
++       * sensor takes a while to produce the image, hence the generous poll. */
++      int r = -1, polls = self->handshaking ? GX_HS_POLLS : 200;
++      self->tls_rxlen = self->tls_rxpos = 0;
++      for (i = 0; i < polls; i++)
++        {
++          r = gx_read_frame (self, &ty, self->tls_rx, GX_RX_MAX);
++          if (r > 0 && ty == GOODIX_PKT_TLS)
++            {
++              fp_dbg ("bio_recv: TLS frame %d bytes (attempt %d)", r, i);
++              break;
++            }
++          r = -1;
++          g_usleep (20000);
++        }
++      if (r <= 0)
++        {
++          fp_dbg ("bio_recv: no TLS frame (timed out)");
++          return -1;
++        }
++      self->tls_rxlen = r;
++      self->tls_rxpos = 0;
++    }
++  avail = self->tls_rxlen - self->tls_rxpos;
++  take = (int) l < avail ? (int) l : avail;
++  memcpy (b, self->tls_rx + self->tls_rxpos, take);
++  self->tls_rxpos += take;
++  return take;
++}
++
++/* Sends a command over the encrypted channel. */
++static int
++gx_tls_cmd (FpiDeviceGoodixTls *self, guint8 cmd, const guint8 *data, int dl)
++{
++  guint8 b[64];
++  int n = dl + 1;
++
++  b[0] = cmd;
++  b[1] = n & 0xFF;
++  b[2] = (n >> 8) & 0xFF;
++  if (dl)
++    memcpy (b + 3, data, dl);
++  b[3 + dl] = goodix_body_cksum (b, 3 + dl);
++  return gx_tls_write (self->tls, b, 4 + dl) ? 4 + dl : -1;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Arbitrary memory read: this is how the pre-shared key is obtained  */
++/* ------------------------------------------------------------------ */
++
++/* Reads @len bytes at @mem into @out; TRUE only for a reply whose command,
++ * length and checksum all check out. */
++static gboolean
++gx_mem_read (FpiDeviceGoodixTls *self, guint32 mem, guint32 len, guint8 *out)
++{
++  guint8 pkt[12], ty, rx[512];
++  int i, n;
++
++  gx_mem_read_cmd (mem, len, self->model->mem_bias, pkt);
++  if (!gx_send_plain_raw (self, pkt, sizeof pkt))
++    return FALSE;
++  g_usleep (10000);
++  /* An ACK first, then the data; skip anything that is not the data. */
++  for (i = 0; i < 4; i++)
++    {
++      n = gx_read_frame (self, &ty, rx, sizeof rx);
++      if (n > 0 && ty == GOODIX_PKT_PLAIN && rx[0] == GOODIX_CMD_MEM_READ)
++        return gx_mem_reply_parse (rx, n, out, len);
++      g_usleep (8000);
++    }
++  return FALSE;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Init, handshake and frame capture                                  */
++/* ------------------------------------------------------------------ */
++
++/* Best-effort discovery of the reset GpioIo from the ACPI _CRS, so the line is
++ * not hardcoded across units (MateBook X Pro = gpiochip0/58, MateBook 13 = 264).
++ * Reads the DSDT, finds the sensor device, and decodes the reset pin from the
++ * Intel GNUM-encoded global the _CRS feeds its GpioIo:
++ *     pin = (enc & 0xFFFF) + ((enc >> 16) & 0xFF) * 24
++ * then picks the gpiochip with enough lines. Intel-platform specific; the caller
++ * falls back to a compiled default and the GOODIXTLS_RESET_* overrides. The
++ * assert polarity is not in _CRS, so it stays a per-model default. */
++static guint
++gx_gnum_decode (guint32 enc)
++{
++  return (enc & 0xFFFF) + (((enc >> 16) & 0xFF) * 24);
++}
++
++static gboolean
++gx_discover_reset (const gchar *acpi_id, gchar **chip_out, guint *line_out)
++{
++  g_autofree gchar *dsdt = NULL;
++  gsize len = 0;
++
++  if (!g_file_get_contents ("/sys/firmware/acpi/tables/DSDT", &dsdt, &len, NULL))
++    return FALSE;
++
++  const guint8 *d = (const guint8 *) dsdt;
++  gssize off = -1;
++  for (gsize i = 0; i + 8 <= len; i++)
++    if (memcmp (d + i, acpi_id, 8) == 0)
++      {
++        off = i;
++        break;
++      }
++  if (off < 0)
++    return FALSE;
++  gsize end = MIN ((gsize) off + 700, len);
++
++  gboolean has_io = FALSE;
++  for (gsize k = off; k + 5 < end; k++)
++    if (d[k] == 0x8C && d[k + 3] == 1 && d[k + 4] == 1)
++      {
++        has_io = TRUE;
++        break;
++      }
++  if (!has_io)
++    return FALSE;
++
++  /* GNUM-encoded globals are DWordConst (0x0C + LE u32) referenced twice (SHPO in
++   * _INI, GNUM in _CRS). First-seen order: [0] = GpioInt (IRQ), [1] = GpioIo
++   * (reset). */
++  guint32 seen[8];
++  int nseen = 0, count[8] = { 0 };
++  for (gsize k = off; k + 5 < end; k++)
++    {
++      if (d[k] != 0x0C)
++        continue;
++      guint32 v = d[k + 1] | (d[k + 2] << 8) | (d[k + 3] << 16) | ((guint32) d[k + 4] << 24);
++      if (((v >> 16) & 0xFF) >= 0x10 || (v & 0xFFFF) >= 0x400 || gx_gnum_decode (v) >= 512)
++        continue;
++      int idx = -1;
++      for (int s = 0; s < nseen; s++)
++        if (seen[s] == v)
++          idx = s;
++      if (idx < 0 && nseen < 8)
++        {
++          seen[nseen] = v;
++          idx = nseen++;
++        }
++      if (idx >= 0)
++        count[idx]++;
++    }
++  guint32 globs[8];
++  int ng = 0;
++  for (int s = 0; s < nseen; s++)
++    if (count[s] >= 2 && ng < 8)
++      globs[ng++] = seen[s];
++  if (ng < 2)
++    return FALSE;
++  guint line = gx_gnum_decode (globs[1]);
++
++  for (int n = 0; n < 8; n++)
++    {
++      g_autofree gchar *path = g_strdup_printf ("/dev/gpiochip%d", n);
++      int fd = open (path, O_RDONLY | O_CLOEXEC);
++      if (fd < 0)
++        {
++          if (n == 0)
++            continue;
++          else
++            break;
++        }
++      struct gpiochip_info ci = { 0 };
++      gboolean ok = ioctl (fd, GPIO_GET_CHIPINFO_IOCTL, &ci) >= 0 && ci.lines > line;
++      close (fd);
++      if (ok)
++        {
++          *chip_out = g_steal_pointer (&path);
++          *line_out = line;
++          return TRUE;
++        }
++    }
++  return FALSE;
++}
++
++/* Hardware reset via the ACPI-declared GpioIo. The line is resolved in order:
++ * the GOODIXTLS_RESET_CHIP / _LINE overrides, then best-effort discovery from the
++ * ACPI _CRS, then the compiled default (GPIO 58 on gpiochip0, this unit). A short
++ * PULSE is what the sensor wants; holding the line down was measured to be
++ * counter-productive, recovery failing where a pulse succeeds. Without this reset,
++ * leftovers from a previous run make init and handshake fail. */
++static void
++gx_gpio_reset (FpiDeviceGoodixTls *self)
++{
++  struct gpio_v2_line_request req = { 0 };
++  struct gpio_v2_line_values val = { 0 };
++  const gchar *chip_env = g_getenv ("GOODIXTLS_RESET_CHIP");
++  const gchar *line_env = g_getenv ("GOODIXTLS_RESET_LINE");
++  g_autofree gchar *disc_chip = NULL;
++  const gchar *chip_path;
++  guint line;
++  int chip;
++
++  if (chip_env || line_env)
++    {
++      chip_path = chip_env ? chip_env : "/dev/gpiochip0";
++      line = line_env ? (guint) g_ascii_strtoull (line_env, NULL, 10) :
++             self->transport->reset_line_default;
++    }
++  /* Only where the heuristic was validated: on the VLT-W50 the GXFP5197's
++   * pins come from NVS fields, not DWordConst globals, and a misread line
++   * would pulse some other pad. */
++  else if (self->transport->reset_from_dsdt &&
++           gx_discover_reset (self->transport->acpi_id, &disc_chip, &line))
++    {
++      chip_path = disc_chip;
++      fp_dbg ("reset: %s line %u discovered from ACPI _CRS", chip_path, line);
++    }
++  else
++    {
++      chip_path = "/dev/gpiochip0";
++      line = self->transport->reset_line_default;
++    }
++
++  chip = open (chip_path, O_RDWR | O_CLOEXEC);
++  if (chip < 0)
++    {
++      /* Never silent: fprintd's DeviceAllow= policy denies this even to root,
++       * and SPI still works without the reset, so the only symptom is a sensor
++       * that behaves like a protocol-timing bug. */
++      fp_warn ("reset: cannot open %s (%s); reset skipped "
++               "(see DeviceAllow= in fprintd.service.d)", chip_path,
++               g_strerror (errno));
++      return;
++    }
++  req.num_lines = 1;
++  req.offsets[0] = line;
++  req.config.flags = GPIO_V2_LINE_FLAG_OUTPUT;
++  g_strlcpy (req.consumer, "goodixtls", sizeof req.consumer);
++  if (ioctl (chip, GPIO_V2_GET_LINE_IOCTL, &req) < 0 || req.fd < 0)
++    {
++      fp_warn ("reset: cannot request line %u on %s: %s", line, chip_path,
++               g_strerror (errno));
++      close (chip);
++      return;
++    }
++  val.mask = 1;
++  val.bits = 0;                          /* assert reset */
++  if (ioctl (req.fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &val) < 0)
++    fp_warn ("reset: cannot assert line %u: %s", line, g_strerror (errno));
++  g_usleep (10000);
++  val.bits = 1;                          /* release */
++  if (ioctl (req.fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &val) < 0)
++    fp_warn ("reset: cannot release line %u: %s", line, g_strerror (errno));
++  g_usleep (self->transport->reset_settle_ms * 1000);
++  close (req.fd);
++  close (chip);
++}
++
++
++
++/* Uploads the configuration blob, which opens the command gate, then enables
++ * the chip and requests a TLS session. */
++static gboolean
++gx_upload_config_and_reqtls (FpiDeviceGoodixTls *self)
++{
++  gx_gpio_reset (self);
++
++  gsize clen = self->model->config_len;
++  g_autofree guint8 *c = g_malloc (clen + 4);
++  guint16 nn = clen + 1;
++
++  c[0] = GOODIX_CMD_UPLOAD_CFG;
++  c[1] = nn & 0xFF;
++  c[2] = (nn >> 8) & 0xFF;
++  if (!gx_config_valid (self->model->config, clen))
++    {
++      fp_warn ("config block checksum wrong; not sending it");
++      return FALSE;
++    }
++  memcpy (c + 3, self->model->config, clen);
++  c[3 + clen] = goodix_body_cksum (c, 3 + clen);
++
++  /* Each step drained to silence, so the firmware's reply is read rather
++   * than left queued; the GXFP5197 bench tool does it this way. The 0xD0
++   * drain stashes the ClientHello for the handshake. */
++  self->tls_rxlen = self->tls_rxpos = 0;
++  gx_send_plain_drain (self, c, clen + 4);
++  if (self->reply_len < 5 || self->reply[3] != 1)
++    {
++      fp_warn ("config refused (reply %d bytes, %02x)", self->reply_len,
++               self->reply_len >= 4 ? self->reply[3] : 0);
++      return FALSE;
++    }
++  gx_send_plain_drain (self, GX_ENABLE, sizeof GX_ENABLE);
++  gx_send_plain_drain (self, GX_REQTLS, sizeof GX_REQTLS);
++  return TRUE;
++}
++
++/* Establishes the TLS-PSK channel, with us as the server. */
++static gboolean
++gx_tls_handshake (FpiDeviceGoodixTls *self)
++{
++  g_autoptr(GError) err = NULL;
++
++  g_clear_pointer (&self->tls, gx_tls_free);
++  self->tls = gx_tls_new (self->psk, GOODIX_PSK_LEN, GOODIX_TLS_IDENTITY,
++                          gx_bio_send, gx_bio_recv, self);
++  if (!self->tls)
++    {
++      fp_warn ("cannot set up the TLS channel");
++      return FALSE;
++    }
++  self->handshaking = TRUE;
++  if (!gx_tls_handshake_run (self->tls, &err))
++    {
++      self->handshaking = FALSE;
++      fp_warn ("%s", err->message);
++      return FALSE;
++    }
++  self->handshaking = FALSE;
++  fp_info ("TLS-PSK session up (%s)", gx_tls_ciphersuite (self->tls));
++  self->tls_up = TRUE;
++  return TRUE;
++}
++
++static void
++gx_tls_teardown (FpiDeviceGoodixTls *self)
++{
++  if (self->tls_up)
++    {
++      gx_tls_close (self->tls);
++      self->tls_up = FALSE;
++    }
++  g_clear_pointer (&self->tls, gx_tls_free);
++}
++
++static void gx_timing_capture_failed (FpiDeviceGoodixTls *self);
++
++/* Exact image capture sequence, as observed on the wire. */
++static void
++gx_send_capture_sequence (FpiDeviceGoodixTls *self)
++{
++/* Pause after each command in the sequence, ON TOP of the drain. It looks
++ * redundant — the drain already waits for silence — but it is not: at 10 ms
++ * every capture fails and the sensor wedges (measured, 19 failures out of 19).
++ * Do not shorten it. */
++#ifndef GX_SEQ_GAP_US
++#define GX_SEQ_GAP_US 30000
++#endif
++
++  const gchar *const *seq = self->model->capture_seq;
++  guint8 body[80];
++  int i, j;
++
++  for (i = 0; seq[i]; i++)
++    {
++      int n = strlen (seq[i]) / 2;
++      for (j = 0; j < n; j++)
++        sscanf (seq[i] + 2 * j, "%2hhx", &body[j]);
++      {
++        gint64 t0 = g_get_monotonic_time ();
++        gx_send_plain_drain (self, body, n);
++        fp_dbg ("chrono cmd=%02x drain=%ld us", body[0],
++                (long) (g_get_monotonic_time () - t0));
++      }
++      g_usleep (GX_SEQ_GAP_US * self->timing_scale / 100);
++    }
++}
++
++/* Captures one full image, assuming a TLS session is already up, and fills
++ * px[GOODIX_IMG_PIXELS] with 12-bit samples. */
++static gboolean
++gx_capture_frame (FpiDeviceGoodixTls *self, guint16 *px)
++{
++  g_autofree guint8 *img = g_malloc (GX_RX_MAX);
++  guint8 st = 0x55;
++  int total = 0, k;
++
++  gint64 tA = g_get_monotonic_time ();
++
++  gx_tls_cmd (self, GOODIX_CMD_MCU_STATE, &st, 1);   /* mcu_state sur TLS */
++  g_usleep (80000);
++  gx_send_capture_sequence (self);
++  fp_dbg ("timing: capture sequence %ld us",
++          (long) (g_get_monotonic_time () - tA));
++
++  /* The image arrives as ONE record larger than TLS allows, so it is decrypted
++   * here rather than handed to OpenSSL, which would reject it outright.
++   *
++   * The record has usually already been picked up while draining the capture
++   * sequence; otherwise wait for it. */
++  {
++    g_autofree guint8 *rec = g_malloc (GX_RX_MAX);
++    int raw = 0;
++    gssize got;
++
++    if (self->tls_rxlen > self->tls_rxpos)
++      {
++        raw = self->tls_rxlen - self->tls_rxpos;
++        memcpy (rec, self->tls_rx + self->tls_rxpos, raw);
++        self->tls_rxlen = self->tls_rxpos = 0;
++      }
++    else
++      {
++        guint8 ty;
++
++        for (k = 0; k < 200; k++)
++          {
++            raw = gx_read_frame (self, &ty, rec, GX_RX_MAX);
++            if (raw > 0 && ty == GOODIX_PKT_TLS)
++              break;
++            raw = 0;
++            g_usleep (20000);
++          }
++      }
++
++    got = raw > 0 ? gx_tls_decrypt_record (self->tls, rec, raw,
++                                           img, GX_RX_MAX) : -1;
++    if (got < 0)
++      {
++        fp_warn ("cannot decrypt the image record (%d raw bytes)", raw);
++        gx_timing_capture_failed (self);
++        return FALSE;
++      }
++    total = (int) got;
++  }
++  fp_dbg ("timing: whole capture %ld us (image %d bytes)",
++          (long) (g_get_monotonic_time () - tA), total);
++  if (total < 22176)
++    {
++      fp_warn ("incomplete image: %d bytes", total);
++      gx_timing_capture_failed (self);
++      return FALSE;
++    }
++  /* Header is a tag, a 16-bit length and five zero bytes, then the 12-bit
++   * samples: skip 8 bytes. */
++  gx_decode_12bit (img + 8, total - 8, px, GOODIX_IMG_PIXELS);
++  return TRUE;
++}
++
++
++static int
++gx_cmp_dbl (const void *a, const void *b)
++{
++  double x = *(const double *) a - *(const double *) b;
++
++  return (x > 0) - (x < 0);
++}
++
++
++
++
++
++
++/* Moyenne n trames en un tableau de pixels. */
++static gboolean
++gx_capture_avg (FpiDeviceGoodixTls *self, int nframes, guint16 *avg)
++{
++  g_autofree guint32 *acc = g_malloc0 (sizeof (guint32) * GOODIX_IMG_PIXELS);
++  guint16 px[GOODIX_IMG_PIXELS];
++  int got = 0, f, i;
++
++  for (f = 0; f < nframes; f++)
++    {
++      if (!gx_capture_frame (self, px))
++        continue;
++      for (i = 0; i < GOODIX_IMG_PIXELS; i++)
++        acc[i] += px[i];
++      got++;
++    }
++  if (!got)
++    return FALSE;
++  for (i = 0; i < GOODIX_IMG_PIXELS; i++)
++    avg[i] = acc[i] / got;
++  return TRUE;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Device life cycle: open / close                                    */
++/* ------------------------------------------------------------------ */
++
++
++
++/* Native finger detection: twelve 16-bit values, one per sensor zone, in about
++ * 33 ms — some 70 times faster than capturing an image. A finger pulls those
++ * values DOWN by roughly 100 counts (around 335/371/361 idle against
++ * 229/269/275 with a finger), which is what makes cheap polling possible. */
++static int
++gx_fdt_probe (FpiDeviceGoodixTls *self, int *out12)
++{
++  static const guint8 fdt[] = {
++    0x36, 0x23, 0x00, 0x0d, 0x01, 0xa6, 0xa6, 0xb9, 0xb9, 0xbc, 0xbc, 0xb7,
++    0xb7, 0xa8, 0xa8, 0xba, 0xba, 0xb7, 0xb7, 0xb8, 0xb8, 0xa8, 0xa8, 0xc1,
++    0xc1, 0xba, 0xba, 0xb5, 0xb5, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x4d
++  };
++  guint8 rx[256], ty;
++  int n, k;
++
++  /* Do NOT shorten these delays. Tested in isolation they passed 20 times out
++   * of 20 at a third of the value, but in real conditions — right after an
++   * image capture — session setup then failed. The responsiveness gained is
++   * not worth it; the polling period already bounds the latency. */
++  gx_send_plain_raw (self, fdt, sizeof fdt);
++  g_usleep (15000 * self->timing_scale / 100);
++  gx_read_frame (self, &ty, rx, sizeof rx);          /* ACK */
++  g_usleep (8000 * self->timing_scale / 100);
++  n = gx_read_frame (self, &ty, rx, sizeof rx);      /* payload */
++  if (n < 31)
++    return -1;
++  for (k = 0; k < 12; k++)
++    out12[k] = rx[7 + 2 * k] | (rx[8 + 2 * k] << 8);
++  return 0;
++}
++
++/* Mean of the twelve detection values: an absolute test needing no baseline. */
++static int
++gx_fdt_mean (const int *v)
++{
++  int k, s = 0;
++
++  for (k = 0; k < 12; k++)
++    s += v[k];
++  return s / 12;
++}
++
++/* Total drop against the baseline; above the threshold means a finger. */
++static int
++gx_fdt_drop (const int *base, const int *cur)
++{
++  int k, d = 0;
++
++  for (k = 0; k < 12; k++)
++    d += base[k] - cur[k];
++  return d / 12;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Enrolment and verification, using local descriptors instead of the */
++/*  NBIS pipeline.                                                     */
++/*                                                                     */
++/*  FpImageDevice mandates NBIS (minutiae plus bozorth3), which this    */
++/*  sensor cannot feed: 6x5 mm yields about 6 minutiae per capture,     */
++/*  far below what reliable matching needs, and bozorth3 scored zero    */
++/*  every time. Hence deriving straight from FpDevice and implementing  */
++/*  enrol and verify against the descriptor matcher in goodix_sift.c.   */
++/* ------------------------------------------------------------------ */
++
++/* Decision threshold: how many points of the capture the template explains
++ * (see the view fusion further down).
++ *
++ * BEWARE — THIS THRESHOLD DEPENDS ON HOW RICH THE TEMPLATE IS, and that is its
++ * weak point. The fused score grows with the number and especially the extent
++ * of the enrolled views, for a foreign finger just as much as for the right
++ * one. Measured against 51 captures of NON-enrolled fingers (several fingers,
++ * both hands, plus a second person):
++ *
++ *   - tight template, 29 views ......... impostor max 3
++ *   - wide template, 30 views spanning
++ *     328x248 (guided enrolment) ....... impostor max 8, four captures >= 5
++ *   - same, plus adaptive views ........ impostor max 9
++ *
++ * In other words, improving coverage ALSO raises the impostor floor: the gain
++ * in rejection rate is paid for in security margin. A threshold of 6, calibrated
++ * on five captures of a single foreign finger, let three false accepts through
++ * (6, 7 and 8) as soon as the set was widened — five samples from one finger
++ * are not enough to set a security parameter.
++ *
++ * Hence a threshold that follows the template's size, and a cap on that size.
++ * Measured with tools/eval (one user, four fingers, 2100 impostor trials per
++ * point, the same captures for every gallery size), the false-accept rate at a
++ * fixed 15 grew with the views fused: 0.05 % at 15 views, 0.33 % at 20, 1.05 %
++ * at 30, 1.43 % at 36 — an impostor gets the best of more chances. Fusing only
++ * the best few views did not help. Holding about 0.05 % takes 15 up to 15
++ * views, 18 up to 20, and 20 up to 30, with 11-15 % rejects per capture. Past
++ * 30 it would keep climbing, so a template is never fused beyond GX_MAX_VIEWS.
++ * Any change to enrolment requires RE-MEASURING this. */
++#define GX_MAX_VIEWS 30
++
++static int
++gx_match_threshold (guint nviews)
++{
++  if (nviews <= 15)
++    return 15;
++  if (nviews <= 20)
++    return 18;
++  return 20;
++}
++
++/* What determines template quality is the number of DISTINCT presses, not the
++ * raw number of captures: two captures taken back to back show almost the same
++ * area, since the finger does not move within a second. Measured, 5 presses of
++ * 3 views each got the genuine finger REJECTED, while a dozen distinct presses
++ * gave reliable recognition. Coverage is the dominant factor. */
++#define GX_ENROLL_STAGES 20   /* presses asked of the user */
++/* One view per press. A second one, captured right after the first, needed the
++ * finger held about 2.4 s; people lift after about one, so it usually came out
++ * empty and was dropped (87 of the views in one 8-enrolment collection) — and
++ * when it did land it showed the area the first had already seen. Five more
++ * distinct presses buy what the second view was meant to. */
++#define GX_VIEWS_PER_STAGE 1
++#define GX_ENROLL_VIEWS (GX_ENROLL_STAGES * GX_VIEWS_PER_STAGE)
++
++/* Reads the firmware version, which also proves the SPI dialogue works. */
++static gboolean
++gx_read_fw_version (FpiDeviceGoodixTls *self, gchar *out, gsize cap)
++{
++  static const guint8 body[] = { GOODIX_CMD_FW_VERSION, 0x03, 0x00, 0x70, 0xDC, 0xB3 };
++  guint8 rx[64], ty;
++  int n, i;
++
++  if (!gx_send_plain_raw (self, body, sizeof body))
++    return FALSE;
++  g_usleep (10000);
++  gx_read_frame (self, &ty, rx, sizeof rx);          /* ACK */
++  g_usleep (5000);
++  n = gx_read_frame (self, &ty, rx, sizeof rx);
++  if (n <= 3 || rx[0] != GOODIX_CMD_FW_VERSION)
++    return FALSE;
++  /* The reply need not be NUL-terminated: copy by length, stop at the first
++   * byte that is not printable ASCII (the terminator, then the checksum). */
++  for (i = 0; i + 3 < n && i + 1 < (int) cap; i++)
++    {
++      if (!g_ascii_isprint (rx[3 + i]))
++        break;
++      out[i] = rx[3 + i];
++    }
++  out[i] = '\0';
++  return i > 0;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Session: TLS setup, background frame, detection baseline           */
++/* ------------------------------------------------------------------ */
++
++/* Learned protocol-timing multiplier, remembered across opens.
++ *
++ * timing_scale stretches the delays of the capture sequence and of the finger
++ * probe, which sit right at the edge on the author's unit; a slower SPI
++ * controller loses sync there, and a capture fails (see gx_timing_capture_failed).
++ * The value is remembered so the next open starts at the timing this unit is
++ * known to need. It lives in fprintd's state directory (the only writable path
++ * under ProtectSystem=strict) and is device- not user-scoped. It holds the scale
++ * and a count of consecutive clean sessions. Delete the file to reset it.
++ *
++ * Earlier versions raised the scale on a failed TLS handshake. No scaled delay
++ * is on the handshake path, so that never helped it, and since a first
++ * handshake that fails and a retry that connects is common, every unit drifted
++ * to the cap and paid three times the capture delays for good. */
++#define GX_TIMING_FILE "/var/lib/fprint/.goodixtls-timing"
++
++/* After this many sessions in a row without a failed capture, the persisted
++ * scale steps back down by one notch. A unit that really needs the higher
++ * value fails a capture, climbs back and restarts the count, so probing costs
++ * one retried capture every few dozen sessions at most. */
++#define GX_TIMING_DECAY_AFTER 10
++
++static int
++gx_timing_load (int *clean)
++{
++  g_autofree gchar *txt = NULL;
++  int v, c = 0;
++
++  *clean = 0;
++  if (!g_file_get_contents (GX_TIMING_FILE, &txt, NULL, NULL))
++    return 100;
++  /* A lone scale is what older versions wrote, and they learned it from failed
++   * handshakes, which no scaled delay affects: start that unit over at 100. */
++  if (sscanf (txt, "%d %d", &v, &c) < 2 || v < 100 || v > 300)
++    return 100;                              /* also ignores a garbled file */
++  *clean = CLAMP (c, 0, GX_TIMING_DECAY_AFTER);
++  return v;
++}
++
++static void
++gx_timing_save (int scale, int clean)
++{
++  g_autofree gchar *txt = g_strdup_printf ("%d %d\n", scale, clean);
++
++  if (!g_file_set_contents (GX_TIMING_FILE, txt, -1, NULL))
++    fp_warn ("could not persist timing scale to %s", GX_TIMING_FILE);
++  else
++    g_chmod (GX_TIMING_FILE, 0600);
++}
++
++/* A capture failed: the sensor lost sync inside the scaled delays. Loosen them
++ * for the rest of this open and persist the new value at once, so the next
++ * open starts there too. Capped so a dead sensor still gives up. */
++static void
++gx_timing_capture_failed (FpiDeviceGoodixTls *self)
++{
++  self->capture_failed = TRUE;
++  if (self->timing_scale >= 300)
++    return;
++  self->timing_scale = MIN (self->timing_scale + 50, 300);
++  self->timing_saved = self->timing_scale;
++  self->timing_clean = 0;
++  gx_timing_save (self->timing_saved, self->timing_clean);
++  fp_info ("capture failed; protocol timings loosened to %d%%",
++           self->timing_scale);
++}
++
++/* End of an open: count a clean session, and after enough of them in a row
++ * persist one notch lower for the next open. */
++static void
++gx_timing_session_end (FpiDeviceGoodixTls *self)
++{
++  if (self->capture_failed)
++    {
++      if (self->timing_clean)
++        {
++          self->timing_clean = 0;
++          gx_timing_save (self->timing_saved, self->timing_clean);
++        }
++      return;
++    }
++  if (self->timing_saved <= 100)
++    return;
++  if (++self->timing_clean >= GX_TIMING_DECAY_AFTER)
++    {
++      self->timing_saved = MAX (self->timing_saved - 50, 100);
++      self->timing_clean = 0;
++      fp_info ("timing scale held %d sessions; next open tries %d%%",
++               GX_TIMING_DECAY_AFTER, self->timing_saved);
++    }
++  gx_timing_save (self->timing_saved, self->timing_clean);
++}
++
++/* The unit's idle FDT level, remembered across opens like the timing scale.
++ *
++ * Calibration measures the idle level at the start of each operation, and a
++ * finger resting on the sensor then pulls it down: the floor lands below the
++ * finger, which is never detected again until it is lifted and the next
++ * operation recalibrates. With the last good idle level on file, the floor is
++ * right from the first probe of an open, and a measurement well below it — a
++ * finger, not drift — is refused. A HIGHER reading is always accepted, so a
++ * bad value on file corrects itself the next time the sensor is idle. */
++#define GX_FDT_FILE "/var/lib/fprint/.goodixtls-fdt"
++
++static int
++gx_fdt_load (void)
++{
++  g_autofree gchar *txt = NULL;
++  int v;
++
++  if (!g_file_get_contents (GX_FDT_FILE, &txt, NULL, NULL) ||
++      sscanf (txt, "%d", &v) != 1 || v <= 0 || v > 4095)
++    return 0;
++  return v;
++}
++
++static void
++gx_fdt_save (int idle)
++{
++  g_autofree gchar *txt = g_strdup_printf ("%d\n", idle);
++
++  if (!g_file_set_contents (GX_FDT_FILE, txt, -1, NULL))
++    fp_warn ("could not persist the idle level to %s", GX_FDT_FILE);
++  else
++    g_chmod (GX_FDT_FILE, 0600);
++}
++
++/* Establishes the TLS channel. This is the expensive step, about half a
++ * second, and it does not depend on when the finger arrives — so it can be
++ * done once and kept. */
++/* Sets the MCU state the way a capture does (0xAE 55 over TLS, then the
++ * plaintext 0xAE that opens the capture sequence), before any finger probe.
++ * On the GXFP5197 a 0x36 sent without that state is never acknowledged, and
++ * the receiver stays deaf to every 0x36 after it. The plaintext 0xAE reply
++ * shows whether the state took: 06 at offset 3 with it, 0c without (bench,
++ * 2026-10-22). The TLS record must not follow the handshake's Finished
++ * immediately: sent within the same millisecond it was ignored. */
++static gboolean
++gx_mcu_ready (FpiDeviceGoodixTls *self)
++{
++  const gchar *hex = self->model->capture_seq[0];
++  guint8 body[32], st = 0x55;
++  int j, n = strlen (hex) / 2;
++
++  g_return_val_if_fail (n <= (int) sizeof body, FALSE);
++  for (j = 0; j < n; j++)
++    sscanf (hex + 2 * j, "%2hhx", &body[j]);
++  g_usleep (20000);
++  gx_tls_cmd (self, GOODIX_CMD_MCU_STATE, &st, 1);
++  g_usleep (80000);
++  gx_send_plain_drain (self, body, n);
++  fp_dbg ("MCU state reply: %d bytes, state %02x", self->reply_len,
++          self->reply_len > 3 ? self->reply[3] : 0);
++  return self->reply_len > 3;
++}
++
++static gboolean
++gx_tls_session (FpiDeviceGoodixTls *self)
++{
++  int att;
++
++  if (self->tls_up)
++    return TRUE;
++  /* Give the first attempt the double reset a retry gets (this one, then the
++   * one in gx_upload_config_and_reqtls). Behind a single reset the first
++   * handshake failed in every session of a run, while retries connected;
++   * with the extra pulse half of the first attempts connected (3 of 6, against
++   * 0 of 7). A small sample, but a failed attempt costs 1.5 s and this 130 ms. */
++  gx_gpio_reset (self);
++  for (att = 1; att <= 5 && !self->tls_up; att++)
++    {
++      GCancellable *c = fpi_device_get_cancellable (FP_DEVICE (self));
++      if (c && g_cancellable_is_cancelled (c))
++        {
++          fp_info ("TLS setup cancelled by the caller");
++          break;
++        }
++      if (gx_upload_config_and_reqtls (self) && gx_tls_handshake (self))
++        {
++          gx_mcu_ready (self);
++          break;
++        }
++      gx_tls_teardown (self);
++
++      /* A plain reset between attempts. Holding the reset line down for a
++       * long time was tried and is actively counter-productive: recovery
++       * fails where a short pulse succeeds. Deep lock-ups are not a sensor
++       * state at all — they sit in the kernel's spidev driver, and only
++       * rebinding it clears them, which a userspace driver cannot do. */
++      gx_gpio_reset (self);
++    }
++  if (!self->tls_up)
++    {
++      fp_warn ("no TLS session after %d attempts; if this persists the sensor "
++               "needs a full recovery (long reset plus an spidev rebind)",
++               att - 1);
++    }
++  return self->tls_up;
++}
++
++/* Refreshes the background frame and the detection baseline.
++ *
++ * This must happen JUST BEFORE each operation, unlike the TLS setup above: the
++ * sensor's baseline level drifts, and the whole chain rests on the
++ * background-minus-finger difference. A background captured too early yields a
++ * distorted image and collapses the score — measured at 11 to 28 matches with
++ * a fresh background against 2 to 4 with one a few tens of seconds old. */
++
++/* How long to wait for the finger to be lifted before taking the background. */
++#define GX_BG_WAIT_MS 2000
++
++/* The last clean background, kept so an operation that starts with the finger
++ * already down need not wait for it to be lifted (the Windows driver never
++ * asks). Measured over 20 minutes and a dozen sessions, a background from
++ * another session scored the same as a fresh one (median 84 against 81, none
++ * near the threshold): between sessions the background moves by about 5,
++ * against a finger signal of about 160. It holds no fingerprint — it is only
++ * ever taken with the finger lifted — and is used only while recent, since
++ * drift over hours (temperature) was not measured. */
++#define GX_BG_FILE "/var/lib/fprint/.goodixtls-bg"
++#define GX_BG_MAX_AGE_S (2 * 3600)
++
++static gboolean
++gx_bg_load (guint16 *bg, int *age_s)
++{
++  g_autofree gchar *data = NULL;
++  gsize len = 0;
++  GStatBuf st;
++
++  if (g_stat (GX_BG_FILE, &st) != 0)
++    return FALSE;
++  *age_s = (int) (time (NULL) - st.st_mtime);
++  if (*age_s < 0 || *age_s > GX_BG_MAX_AGE_S)
++    return FALSE;
++  if (!g_file_get_contents (GX_BG_FILE, &data, &len, NULL) ||
++      len != sizeof (guint16) * GOODIX_IMG_PIXELS)
++    return FALSE;
++  memcpy (bg, data, len);
++  return TRUE;
++}
++
++static void
++gx_bg_save (const guint16 *bg)
++{
++  if (!g_file_set_contents (GX_BG_FILE, (const gchar *) bg,
++                            sizeof (guint16) * GOODIX_IMG_PIXELS, NULL))
++    fp_warn ("could not save the background to %s", GX_BG_FILE);
++  else
++    g_chmod (GX_BG_FILE, 0600);
++}
++
++static gboolean
++gx_session_start (FpiDeviceGoodixTls *self)
++{
++  int q, k;
++
++  if (!gx_tls_session (self))
++    return FALSE;
++
++  self->bg_dirty = FALSE;
++
++  /* Both the background and the detection baseline are only meaningful with
++   * the finger LIFTED. A finger left resting on the sensor when the operation
++   * starts ends up in the background, the difference then cancels out, and the
++   * capture is worthless — the observed symptom being verifications collapsing
++   * from about 100 matches to 6 with no change in how the finger was placed.
++   *
++   * So take the background, ask the sensor whether it saw a finger, and redo it
++   * if so. Background first, detection second, matching the order the rest of
++   * the driver uses.
++   *
++   * The presence test here is the ABSOLUTE one, the only usable choice, since
++   * the relative baseline is precisely what we are about to establish. */
++  if (!self->bg_frame)
++    self->bg_frame = g_malloc (sizeof (guint16) * GOODIX_IMG_PIXELS);
++
++  {
++    int cur[12], waited = 0, age = 0;
++    gboolean timeout = FALSE, reused = FALSE;
++    gint64 t0 = g_get_monotonic_time ();
++
++    /* Finger already down and a recent clean background on file: use it
++     * rather than make the user lift. Only with a known idle level, so that
++     * "finger down" is judged against this unit and not the fixed default. */
++    if (self->fdt_known && gx_fdt_probe (self, cur) == 0 &&
++        gx_fdt_mean (cur) < self->fdt_abs &&
++        gx_bg_load (self->bg_frame, &age))
++      {
++        fp_info ("finger already down: using the background saved %d s ago",
++                 age);
++        reused = TRUE;
++      }
++
++    while (!reused)
++      {
++        /* Wait for the finger to be lifted BEFORE spending a capture on the
++        * background, not after. Probing costs about 33 ms, a background
++        * capture about 1.5 s, and taking the background first paid that
++        * second on every round: four rounds of a finger still down meant
++        * four discarded captures, which is how the wait before the prompt
++        * reached 7 s. Probing first makes those rounds cost 200 ms each. */
++        while (!timeout && gx_fdt_probe (self, cur) == 0 &&
++               gx_fdt_mean (cur) < self->fdt_abs)
++          {
++            if (waited >= GX_BG_WAIT_MS)
++              {
++                timeout = TRUE;
++              }
++            else
++              {
++                g_usleep (200 * 1000);
++                waited += 200;
++              }
++          }
++
++        if (!gx_capture_avg (self, GOODIX_BG_FRAMES, self->bg_frame))
++          return FALSE;
++
++        /* The capture itself lasts about 1.5 s, so a finger can land while it
++         * runs and end up baked into the background. Check once more, and
++         * redo it if that happened. */
++        if (gx_fdt_probe (self, cur) != 0 || gx_fdt_mean (cur) >= self->fdt_abs)
++          {
++            gx_bg_save (self->bg_frame);           /* no finger: background good */
++            break;
++          }
++        /* The finger landed during the capture: same case as one already
++         * down, so fall back on the saved background straight away. Waiting
++         * for a lift first and capturing again cost 3.4 s per sudo (measured:
++         * the user lays the finger on at the prompt, while the session is
++         * still being set up, and keeps it there), and fprintd-enroll gives
++         * up on remove-finger. */
++        if (self->fdt_known && gx_bg_load (self->bg_frame, &age))
++          {
++            fp_info ("finger landed during the background: using the one "
++                     "saved %d s ago", age);
++            break;
++          }
++        if (timeout)
++          {
++            fp_warn ("finger still down after %d ms: taking the background "
++                     "anyway, capture will be degraded", GX_BG_WAIT_MS);
++            self->bg_dirty = TRUE;
++            break;
++          }
++      }
++    if (waited)
++      fp_info ("background delayed %d ms (finger was down)", waited);
++    fp_info ("session ready in %d ms",
++             (int) ((g_get_monotonic_time () - t0) / 1000));
++  }
++
++  /* Detection baseline. The wait above leaves the finger lifted, except when a
++   * saved background was reused; the reading is then refused as a finger
++   * below, and the known idle level stands in for it. */
++  {
++    int t[12], acc[12] = { 0 }, nb = 0;
++    for (q = 0; q < 4; q++)
++      if (gx_fdt_probe (self, t) == 0)
++        {
++          for (k = 0; k < 12; k++)
++            acc[k] += t[k];
++          nb++;
++        }
++    if (nb)
++      {
++        int base[12], idle;
++
++        for (k = 0; k < 12; k++)
++          base[k] = acc[k] / nb;
++        idle = gx_fdt_mean (base);
++
++        /* A finger, not the idle level: the background was taken with it down,
++         * or the reading sits well below the level this unit is known to idle
++         * at. Keep the previous baseline (or derive one from the known level)
++         * rather than calibrate onto the finger. */
++        if (self->fdt_known &&
++            (self->bg_dirty || idle < self->fdt_known - 2 * GOODIX_FDT_ABS_MARGIN))
++          {
++            if (!self->have_fdt)
++              {
++                for (k = 0; k < 12; k++)
++                  self->fdt_base[k] = self->fdt_known;
++                self->have_fdt = TRUE;
++              }
++            self->fdt_abs = self->fdt_known - GOODIX_FDT_ABS_MARGIN;
++            fp_info ("FDT reading %d looks like a finger (idle %d): floor kept "
++                     "at %d", idle, self->fdt_known, self->fdt_abs);
++          }
++        else
++          {
++            memcpy (self->fdt_base, base, sizeof base);
++            self->have_fdt = TRUE;
++            /* Derive the absolute floor from THIS unit's idle level instead of
++             * a fixed number. A finger only ever pulls the mean down, so the
++             * floor sits a fixed margin below idle; where idle actually is no
++             * longer matters, which is what makes detection work on a sensor
++             * other than the author's. */
++            self->fdt_abs = idle - GOODIX_FDT_ABS_MARGIN;
++            fp_info ("FDT auto-calibrated: idle mean=%d -> floor=%d (drop>%d)",
++                     idle, self->fdt_abs, GOODIX_FDT_DROP);
++            if (!self->bg_dirty && ABS (idle - self->fdt_known) >= 4)
++              {
++                gx_fdt_save (idle);
++                self->fdt_known = idle;
++              }
++          }
++      }
++  }
++  return self->have_fdt;
++}
++
++
++
++/* Pre-processing: subtract the background, then remove row and column
++ * banding with a median. */
++
++static double *
++gx_preprocess (FpiDeviceGoodixTls *self, const guint16 *px)
++{
++  const int W = GOODIX_IMG_WIDTH, H = GOODIX_IMG_HEIGHT;
++  double *d = g_malloc (sizeof (double) * GOODIX_IMG_PIXELS);
++  g_autofree double *buf = g_malloc (sizeof (double) * MAX (W, H));
++  int x, y, i;
++
++  for (i = 0; i < GOODIX_IMG_PIXELS; i++)
++    d[i] = (double) self->bg_frame[i] - px[i];
++  for (y = 0; y < H; y++)
++    {
++      for (x = 0; x < W; x++)
++        buf[x] = d[y * W + x];
++      qsort (buf, W, sizeof (double), gx_cmp_dbl);
++      { double m = buf[W / 2];
++        for (x = 0; x < W; x++)
++          d[y * W + x] -= m;
++      }
++    }
++  for (x = 0; x < W; x++)
++    {
++      for (y = 0; y < H; y++)
++        buf[y] = d[y * W + x];
++      qsort (buf, H, sizeof (double), gx_cmp_dbl);
++      { double m = buf[H / 2];
++        for (y = 0; y < H; y++)
++          d[y * W + x] -= m;
++      }
++    }
++  return d;
++}
++
++/* Is a finger actually down? Costs about 33 ms. */
++static gboolean
++gx_finger_present (FpiDeviceGoodixTls *self)
++{
++  int cur[12];
++
++  if (gx_fdt_probe (self, cur) != 0)
++    return FALSE;
++  return gx_fdt_drop (self->fdt_base, cur) > GOODIX_FDT_DROP ||
++         gx_fdt_mean (cur) < self->fdt_abs;
++}
++
++
++/* Dumps captures for offline evaluation. Enabled simply by the dump directory
++ * existing, rather than by an environment variable, which cannot conveniently
++ * be set on an already-running systemd service.
++ *
++ * pN.bin holds the raw frame as 16-bit samples and pN.bin.bg the matching
++ * background, so that recorded sets can be replayed through the offline
++ * matcher bench. */
++#define GX_DUMP_DIR "/run/goodixtls/dump"
++
++static void
++gx_dump_capture (FpiDeviceGoodixTls *self, const guint16 *px)
++{
++  static int seq = 0;
++  g_autofree gchar *p = NULL, *b = NULL;
++
++  if (!g_file_test (GX_DUMP_DIR, G_FILE_TEST_IS_DIR) || !self->bg_frame)
++    return;
++
++  /* Continue past captures already there, so a restart does not overwrite
++   * an earlier collection run. */
++  do
++    {
++      g_free (p);
++      p = g_strdup_printf ("%s/p%03d.bin", GX_DUMP_DIR, ++seq);
++    }
++  while (g_file_test (p, G_FILE_TEST_EXISTS) && seq < 9999);
++
++  b = g_strdup_printf ("%s.bg", p);
++  if (g_file_set_contents (p, (const gchar *) px,
++                           sizeof (guint16) * GOODIX_IMG_PIXELS, NULL) &&
++      g_file_set_contents (b, (const gchar *) self->bg_frame,
++                           sizeof (guint16) * GOODIX_IMG_PIXELS, NULL))
++    fp_info ("capture saved: %s", p);
++}
++
++/* Captures one press and extracts its descriptors. */
++static GxSiftFeatures *
++gx_capture_features (FpiDeviceGoodixTls *self)
++{
++  guint16 px[GOODIX_IMG_PIXELS];
++  g_autofree double *img = NULL;
++  double m = 0, v = 0;
++  int i;
++
++  if (!gx_capture_frame (self, px))
++    return NULL;
++  gx_dump_capture (self, px);
++  img = gx_preprocess (self, px);
++
++  /* This quality gate is ESSENTIAL. The keypoint detector always returns
++   * maxima, even on pure noise, so the number of points says nothing about
++   * whether a capture is usable. What separates them is contrast: about 5
++   * with no finger against about 200 with one. Without this check a failed
++   * press enters the template and degrades it permanently — observed when a
++   * user lifted between the two views of a press, poisoning every stage. */
++  for (i = 0; i < GOODIX_IMG_PIXELS; i++)
++    m += img[i];
++  m /= GOODIX_IMG_PIXELS;
++  for (i = 0; i < GOODIX_IMG_PIXELS; i++)
++    {
++      double d = img[i] - m;
++      v += d * d;
++    }
++  v = sqrt (v / GOODIX_IMG_PIXELS);
++  if (v < GOODIX_FINGER_STD / 3.0)
++    {
++      fp_info ("capture rejected: contrast %.0f (no finger?)", v);
++      return NULL;
++    }
++  return gx_sift_extract (img, GOODIX_IMG_WIDTH, GOODIX_IMG_HEIGHT);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Serialising a set of views into an FpPrint                         */
++/* ------------------------------------------------------------------ */
++
++static GVariant *
++gx_views_to_variant (GPtrArray *views)
++{
++  GVariantBuilder b;
++  guint i;
++
++  g_variant_builder_init (&b, G_VARIANT_TYPE ("aay"));
++  for (i = 0; i < views->len; i++)
++    {
++      g_autoptr(GByteArray) ba = gx_sift_serialize (g_ptr_array_index (views, i));
++      g_variant_builder_add_value (
++        &b, g_variant_new_fixed_array (G_VARIANT_TYPE_BYTE, ba->data, ba->len, 1));
++    }
++  return g_variant_new ("aay", &b);
++}
++
++static GPtrArray *
++gx_views_from_print (FpPrint *print)
++{
++  g_autoptr(GVariant) data = NULL;
++  GPtrArray *views = g_ptr_array_new_with_free_func ((GDestroyNotify) gx_sift_free);
++  GVariantIter it;
++  GVariant *child;
++
++  g_object_get (print, "fpi-data", &data, NULL);
++  if (!data || !g_variant_is_of_type (data, G_VARIANT_TYPE ("aay")))
++    return views;
++  g_variant_iter_init (&it, data);
++  while ((child = g_variant_iter_next_value (&it)))
++    {
++      gsize len = 0;
++      const guint8 *raw = g_variant_get_fixed_array (child, &len, 1);
++      GxSiftFeatures *f = gx_sift_deserialize (raw, len);
++      if (f)
++        g_ptr_array_add (views, f);
++      g_variant_unref (child);
++    }
++  return views;
++}
++
++/* ------------------------------------------------------------------ */
++/*  Adaptive store: widening coverage as the sensor gets used          */
++/* ------------------------------------------------------------------ */
++
++/* libfprint offers no way to hand back an enriched template: verify completion
++ * takes no FpPrint, and fprintd only writes a template from the enrol path. So
++ * the driver keeps its own store alongside fprintd's — never inside it, since
++ * fprintd scans its own directory and would mistake our files for templates.
++ *
++ * SAFETY — the rule that makes adaptation harmless: the acquisition threshold
++ * sits strictly ABOVE the decision threshold. Anyone triggering an acquisition
++ * is therefore already authenticating with a comfortable margin, so adaptation
++ * never lowers the bar for an attacker; it only widens the coverage of someone
++ * who already passes. Without that rule a doubtful accept would be written
++ * permanently into the template, which is template poisoning. */
++/* Acquisition threshold: twice the decision threshold for the template's size. */
++#define GX_ADAPT_MIN(threshold) (2 * (threshold))
++/* Novelty ceiling, expressed as a FRACTION of the capture's points rather than
++ * an absolute count. The score scales with template richness — measured, a
++ * 30-view template lifts ordinary poses from about 12 matches to about 100 — so
++ * a fixed ceiling stops qualifying anything as soon as the template improves.
++ * Above 60 % of points explained the pressed area is already well covered and
++ * one more view would teach nothing. */
++#define GX_ADAPT_MAX_FRAC 0.60
++/* The store must live INSIDE fprintd's state directory: its systemd unit
++ * declares ProtectSystem=strict with StateDirectory=fprint, leaving the rest of
++ * the filesystem read-only to it. The name starts with a dot so it can never be
++ * taken for a user directory — fprintd only ever opens the directory named
++ * after an authenticated user, and no account is named like this. */
++#define GX_ADAPT_DIR "/var/lib/fprint/.goodixtls-adapt"
++
++/* Store path for a given template, or NULL when the template carries no usable
++ * identity. The user name comes from fprintd; reject anything that could escape
++ * the directory. */
++static gchar *
++gx_adapt_path (FpPrint *print)
++{
++  const gchar *user = print ? fp_print_get_username (print) : NULL;
++
++  if (!user || !*user || strchr (user, '/') || g_str_has_prefix (user, "."))
++    return NULL;
++  return g_strdup_printf ("%s/%s.%d.views", GX_ADAPT_DIR, user,
++                          (int) fp_print_get_finger (print));
++}
++
++/* Views accumulated, in acquisition order: a sequence of length-prefixed
++ * blocks, each one a view serialised exactly as in an fprintd template. */
++static GPtrArray *
++gx_adapt_load (const gchar *path)
++{
++  GPtrArray *views = g_ptr_array_new_with_free_func ((GDestroyNotify) gx_sift_free);
++  g_autofree gchar *raw = NULL;
++  gsize len = 0, off = 0;
++
++  if (!path || !g_file_get_contents (path, &raw, &len, NULL))
++    return views;
++
++  while (off + 4 <= len)
++    {
++      guint32 sz;
++      GxSiftFeatures *f;
++
++      memcpy (&sz, raw + off, 4);
++      off += 4;
++      if (sz > len - off)
++        break;                          /* truncated file: keep what we have */
++      f = gx_sift_deserialize ((const guint8 *) raw + off, sz);
++      if (f)
++        g_ptr_array_add (views, f);
++      off += sz;
++    }
++  return views;
++}
++
++/* Keeps only the most recent adapted views that fit under GX_MAX_VIEWS next to
++ * the enrolled ones. An older store can hold more (up to 20 next to a 30-view
++ * enrolment): they stay on disk, unused. */
++static void
++gx_adapt_cap (GPtrArray *extra, guint enrolled)
++{
++  guint room = enrolled < GX_MAX_VIEWS ? GX_MAX_VIEWS - enrolled : 0;
++
++  if (extra->len > room)
++    g_ptr_array_remove_range (extra, 0, extra->len - room);
++}
++
++static gboolean
++gx_adapt_append (const gchar *path, const GxSiftFeatures *f)
++{
++  g_autoptr(GByteArray) blob = NULL;
++  g_autoptr(GError) err = NULL;
++  guint32 sz;
++  gboolean ok;
++  FILE *fh;
++
++  if (!path)
++    return FALSE;
++  blob = gx_sift_serialize (f);
++  if (!blob)
++    return FALSE;
++
++  if (g_mkdir_with_parents (GX_ADAPT_DIR, 0700) != 0)
++    {
++      fp_warn ("adaptive store: cannot create %s: %s",
++               GX_ADAPT_DIR, g_strerror (errno));
++      return FALSE;
++    }
++  /* Append only: a view already written is never rewritten, so a crash mid
++   * write can only damage the last one, which the reader then skips cleanly. */
++  fh = fopen (path, "ab");
++  if (!fh)
++    {
++      fp_warn ("adaptive store: %s: %s", path, g_strerror (errno));
++      return FALSE;
++    }
++  sz = blob->len;
++  ok = (fwrite (&sz, 4, 1, fh) == 1 &&
++        fwrite (blob->data, 1, blob->len, fh) == blob->len);
++  if (!ok)
++    fp_warn ("adaptive store: short write to %s", path);
++  if (fclose (fh) != 0)
++    ok = FALSE;
++  g_chmod (path, 0600);
++  return ok;
++}
++
++/* Clears the store when its template is deleted or re-enrolled: acquired views
++ * must not outlive the template that authorised them. */
++static void
++gx_adapt_clear (FpPrint *print)
++{
++  g_autofree gchar *path = gx_adapt_path (print);
++
++  if (path && g_unlink (path) == 0)
++    fp_info ("adaptive store cleared (%s)", path);
++}
++
++/* fprintd deletes the template itself and NEVER tells the driver: our prints
++ * are host-stored, and libfprint's delete vfunc only covers templates kept on
++ * the device. Without the sweep below, deleting a fingerprint in the desktop
++ * settings would leave its descriptors on disk indefinitely — a privacy
++ * problem, not merely untidiness.
++ *
++ * So catch up at open time: any store whose fprintd template has vanished is
++ * removed. This is not instant — it takes an operation on the sensor to trigger
++ * the cleanup — but it is the only hook libfprint leaves to a driver. */
++static void
++gx_adapt_sweep (void)
++{
++  GDir *d = g_dir_open (GX_ADAPT_DIR, 0, NULL);
++  const gchar *name;
++
++  if (!d)
++    return;
++
++  while ((name = g_dir_read_name (d)))
++    {
++      g_autofree gchar *stem = NULL, *user = NULL, *userdir = NULL;
++      const gchar *finger;
++      gboolean found = FALSE;
++      gchar *dot;
++      GDir *dd;
++
++      if (!g_str_has_suffix (name, ".views"))
++        continue;
++      stem = g_strndup (name, strlen (name) - strlen (".views"));
++
++      /* Split "<user>.<finger>" at the LAST dot: a user name may itself
++       * contain one. */
++      dot = strrchr (stem, '.');
++      if (!dot || !dot[1])
++        continue;
++      *dot = '\0';
++      user = g_strdup (stem);
++      finger = dot + 1;
++
++      /* The template lives under <user>/<driver id>/<device id>/<finger>,
++       * and the device id may vary. */
++      userdir = g_build_filename ("/var/lib/fprint", user, "goodixtls", NULL);
++      dd = g_dir_open (userdir, 0, NULL);
++      if (dd)
++        {
++          const gchar *devid;
++          while (!found && (devid = g_dir_read_name (dd)))
++            {
++              g_autofree gchar *p = g_build_filename (userdir, devid, finger, NULL);
++              found = g_file_test (p, G_FILE_TEST_EXISTS);
++            }
++          g_dir_close (dd);
++        }
++
++      if (!found)
++        {
++          g_autofree gchar *victim = g_build_filename (GX_ADAPT_DIR, name, NULL);
++          if (g_unlink (victim) == 0)
++            fp_info ("removed orphaned adaptive store %s "
++                     "(its template is gone)", name);
++        }
++    }
++  g_dir_close (d);
++}
++
++
++/* ------------------------------------------------------------------ */
++/*  Enrolment and verification                                         */
++/*                                                                     */
++/*  A libfprint driver must not block the main loop: fprintd answers    */
++/*  D-Bus calls while an operation is in flight. Waiting for the finger */
++/*  is therefore done with successive detection polls driven by a       */
++/*  timeout, each returning within about 33 ms.                        */
++/* ------------------------------------------------------------------ */
++
++typedef struct
++{
++  GPtrArray      *views;   /* descriptors accumulated while enrolling */
++  GxSiftFeatures *probe;   /* descriptors of the capture being verified */
++  int             best;    /* best score reached across attempts */
++  int             tries;   /* captures attempted for this verification */
++  int             stage;   /* vue en cours */
++  int             polls;   /* polls done in the current state */
++  gboolean        verifying;
++  int             threshold; /* decision threshold for the template's size */
++  GxSiftIsland   *island;  /* coverage accumulated, for enrolment guidance */
++} GxTask;
++
++enum {
++  GX_ST_SESSION,       /* init TLS + fond + ligne de base FDT */
++  GX_ST_WAIT_ON,       /* wait for the finger, polling without blocking */
++  GX_ST_CAPTURE,       /* capture, then extract descriptors */
++  GX_ST_WAIT_OFF,      /* wait for the finger to be lifted */
++  GX_ST_DONE,
++  GX_ST_NUM,
++};
++
++#define GX_POLL_MS 100         /* detection polling period */
++#define GX_POLL_MAX 300        /* about 30 s before giving up */
++#define GX_POLL_OFF 100        /* about 10 s to wait for release */
++
++/* ------------------------------------------------------------------ */
++/*  Off-loading the blocking work                                      */
++/* ------------------------------------------------------------------ */
++
++/* Two steps take about a second each and cannot be split: establishing the
++ * session (TLS handshake plus a background capture) and capturing an image.
++ * Both go through OpenSSL's blocking API over a synchronous SPI file
++ * descriptor, which cannot be pumped from callbacks without restructuring the
++ * whole TLS layer.
++ *
++ * Run inline they froze the main loop, so fprintd stopped answering D-Bus for
++ * the duration. Since libfprint runs one operation at a time and the state
++ * machine waits for the completion callback, nothing else touches the device
++ * while the worker runs, which makes a worker thread safe here; libfprint's own
++ * secugen driver off-loads its heavy work the same way.
++ *
++ * Only these two steps move off the main loop. Finger detection stays on it: at
++ * roughly 33 ms a poll it is short enough not to be felt, and keeping it there
++ * avoids any cross-thread access to the sensor between captures. */
++
++typedef struct
++{
++  FpiSsm         *ssm;
++  FpDevice       *dev;
++  GxSiftFeatures *feat;      /* capture result, NULL on failure */
++  GPtrArray      *extra;     /* additional views of the same press */
++  gboolean        ok;
++} GxWork;
++
++static void
++gx_work_free (GxWork *w)
++{
++  g_clear_pointer (&w->feat, gx_sift_free);
++  if (w->extra)
++    g_ptr_array_free (w->extra, TRUE);
++  g_free (w);
++}
++
++static void
++gx_session_thread (GTask *task, gpointer src, gpointer data, GCancellable *c)
++{
++  GxWork *w = data;
++
++  w->ok = gx_session_start (FPI_DEVICE_GOODIXTLS (w->dev));
++  g_task_return_boolean (task, TRUE);
++}
++
++static void
++gx_capture_thread (GTask *task, gpointer src, gpointer data, GCancellable *c)
++{
++  GxWork *w = data;
++  FpiDeviceGoodixTls *self = FPI_DEVICE_GOODIXTLS (w->dev);
++  GxTask *t = fpi_ssm_get_data (w->ssm);
++
++  w->feat = gx_capture_features (self);
++  w->ok = (w->feat != NULL);
++
++  /* Several views per press: the finger shifts slightly between captures, which
++   * enriches the template without asking the user for more gestures. They are
++   * captured here but handed to the main loop for merging — the state
++   * machine's data must only be mutated there. */
++  if (w->ok && w->feat->n >= 8 && !t->verifying)
++    {
++      int extra;
++
++      w->extra = g_ptr_array_new_with_free_func ((GDestroyNotify) gx_sift_free);
++      for (extra = 1; extra < GX_VIEWS_PER_STAGE; extra++)
++        {
++          GxSiftFeatures *g;
++
++          if (!gx_finger_present (self))
++            break;
++          g = gx_capture_features (self);
++          if (g && g->n >= 8)
++            g_ptr_array_add (w->extra, g);
++          else
++            g_clear_pointer (&g, gx_sift_free);
++        }
++    }
++  g_task_return_boolean (task, TRUE);
++}
++
++/* The actual teardown, shared between an immediate close and one deferred until
++ * a worker thread has finished. Safe to call only when no work thread is
++ * touching the state below: from gx_dev_close when no worker runs, or from a
++ * completion callback, which the main loop invokes only AFTER the thread has
++ * returned. */
++static void
++gx_finish_close (FpiDeviceGoodixTls *self)
++{
++  gx_timing_session_end (self);
++  g_clear_handle_id (&self->poll_id, g_source_remove);
++  gx_tls_teardown (self);
++  if (self->spi_fd >= 0)
++    {
++      close (self->spi_fd);
++      self->spi_fd = -1;
++    }
++  g_clear_pointer (&self->bg_frame, g_free);
++  self->close_pending = FALSE;
++  fpi_device_close_complete (FP_DEVICE (self), NULL);
++}
++
++static void
++gx_session_done (GObject *src, GAsyncResult *res, gpointer user_data)
++{
++  GxWork *w = g_task_get_task_data (G_TASK (res));
++  FpiDeviceGoodixTls *self = FPI_DEVICE_GOODIXTLS (w->dev);
++
++  self->worker_active = FALSE;
++  if (self->close_pending)
++    {
++      /* close was requested while this thread ran; the thread is done now, so
++       * the deferred teardown is safe. Fail the SSM first to unwind the
++       * operation cleanly, then complete the close. */
++      fpi_ssm_mark_failed (w->ssm, g_error_new (G_IO_ERROR,
++                                                G_IO_ERROR_CANCELLED, "device closing"));
++      gx_finish_close (self);
++      return;
++    }
++  if (!w->ok)
++    {
++      fpi_ssm_mark_failed (w->ssm, fpi_device_error_new_msg (
++                             FP_DEVICE_ERROR_PROTO, "sensor initialisation failed"));
++      return;
++    }
++  if (self->bg_dirty)
++    {
++      /* Better to ask for the finger to be removed than to return a collapsed
++       * score the user could not possibly explain. */
++      fpi_ssm_mark_failed (w->ssm,
++                           fpi_device_retry_new (FP_DEVICE_RETRY_REMOVE_FINGER));
++      return;
++    }
++  fpi_ssm_next_state (w->ssm);
++}
++
++/* Runs @fn on a worker thread, then @done on the main loop. */
++static void
++gx_run_async (FpiSsm *ssm, FpDevice *dev, GTaskThreadFunc fn,
++              GAsyncReadyCallback done)
++{
++  GTask *task = g_task_new (dev, NULL, done, NULL);
++  GxWork *w = g_new0 (GxWork, 1);
++
++  w->ssm = ssm;
++  w->dev = dev;
++  FPI_DEVICE_GOODIXTLS (dev)->worker_active = TRUE;
++  g_task_set_task_data (task, w, (GDestroyNotify) gx_work_free);
++  g_task_run_in_thread (task, fn);
++  g_object_unref (task);
++}
++
++static void
++gx_task_free (GxTask *t)
++{
++  if (!t)
++    return;
++  if (t->views)
++    g_ptr_array_free (t->views, TRUE);
++  g_clear_pointer (&t->probe, gx_sift_free);
++  g_clear_pointer (&t->island, gx_sift_island_free);
++  g_free (t);
++}
++
++
++/* libfprint provides a GCancellable per operation; that is how fprintd asks us
++ * to stop when the user dismisses the prompt or picks the password instead.
++ * Without checking it the polls run to their limit, roughly 30 seconds, the
++ * stop call times out and the sensor stays busy. */
++static gboolean
++gx_cancelled (FpDevice *dev, FpiSsm *ssm)
++{
++  GCancellable *c = fpi_device_get_cancellable (dev);
++
++  if (!c || !g_cancellable_is_cancelled (c))
++    return FALSE;
++  fp_info ("operation cancelled by the caller");
++  fpi_device_report_finger_status (dev, FP_FINGER_STATUS_NONE);
++  fpi_ssm_mark_failed (ssm, g_error_new (G_IO_ERROR, G_IO_ERROR_CANCELLED,
++                                         "operation cancelled"));
++  return TRUE;
++}
++
++/* Non-blocking poll, re-armed by timeout until the finger is detected. */
++static gboolean
++gx_poll_on (gpointer user_data)
++{
++  FpiSsm *ssm = user_data;
++  FpDevice *dev = fpi_ssm_get_device (ssm);
++  FpiDeviceGoodixTls *self = FPI_DEVICE_GOODIXTLS (dev);
++  GxTask *t = fpi_ssm_get_data (ssm);
++  int cur[12];
++
++  if (gx_cancelled (dev, ssm))
++    {
++      self->poll_id = 0;
++      return G_SOURCE_REMOVE;
++    }
++
++  if (gx_fdt_probe (self, cur) != 0)
++    {
++      fp_dbg ("wait-on: detection probe failed");
++      goto again;
++    }
++
++  /* Reuse the values just read; probing twice per poll perturbs the sensor. */
++  if (t->polls % 5 == 0)
++    fp_info ("wait-on: mean=%d drop=%d (thresholds %d / %d)",
++             gx_fdt_mean (cur), gx_fdt_drop (self->fdt_base, cur),
++             self->fdt_abs, GOODIX_FDT_DROP);
++
++  if (gx_fdt_drop (self->fdt_base, cur) > GOODIX_FDT_DROP ||
++      gx_fdt_mean (cur) < self->fdt_abs)
++    {
++      /* Keep NEEDED asserted: the capture still takes about 1.1 s and the
++       * finger must stay down for it. This flag is what lets a user interface
++       * say when to lift — without it people lift on detection, one second too
++       * early, and spoil the capture. */
++      fpi_device_report_finger_status (dev, FP_FINGER_STATUS_NEEDED |
++                                       FP_FINGER_STATUS_PRESENT);
++      self->poll_id = 0;
++      fpi_ssm_jump_to_state (ssm, GX_ST_CAPTURE);
++      return G_SOURCE_REMOVE;
++    }
++again:
++  if (++t->polls > GX_POLL_MAX)
++    {
++      self->poll_id = 0;
++      fpi_ssm_mark_failed (ssm, fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
++      return G_SOURCE_REMOVE;
++    }
++  return G_SOURCE_CONTINUE;
++}
++
++static gboolean
++gx_poll_off (gpointer user_data)
++{
++  FpiSsm *ssm = user_data;
++  FpDevice *dev = fpi_ssm_get_device (ssm);
++  FpiDeviceGoodixTls *self = FPI_DEVICE_GOODIXTLS (dev);
++  GxTask *t = fpi_ssm_get_data (ssm);
++  int cur[12];
++  gboolean off = FALSE;
++
++  if (gx_cancelled (dev, ssm))
++    {
++      self->poll_id = 0;
++      return G_SOURCE_REMOVE;
++    }
++
++  if (gx_fdt_probe (self, cur) == 0 &&
++      gx_fdt_drop (self->fdt_base, cur) < GOODIX_FDT_DROP / 2 &&
++      gx_fdt_mean (cur) >= self->fdt_abs)
++    off = TRUE;
++
++  if (off || ++t->polls > GX_POLL_OFF)
++    {
++      fpi_device_report_finger_status (dev, FP_FINGER_STATUS_NONE);
++      /* vue suivante, ou fin */
++      if (t->verifying || t->stage >= GX_ENROLL_STAGES)
++        fpi_ssm_jump_to_state (ssm, GX_ST_DONE);
++      else
++        fpi_ssm_jump_to_state (ssm, GX_ST_WAIT_ON);
++      self->poll_id = 0;
++      return G_SOURCE_REMOVE;
++    }
++  return G_SOURCE_CONTINUE;
++}
++
++static void
++gx_capture_done (GObject *src, GAsyncResult *res, gpointer user_data)
++{
++  GxWork *w = g_task_get_task_data (G_TASK (res));
++  FpiSsm *ssm = w->ssm;
++  FpDevice *dev = w->dev;
++  FpiDeviceGoodixTls *self = FPI_DEVICE_GOODIXTLS (dev);
++
++  self->worker_active = FALSE;
++  if (self->close_pending)
++    {
++      fpi_ssm_mark_failed (ssm, g_error_new (G_IO_ERROR,
++                                             G_IO_ERROR_CANCELLED, "device closing"));
++      gx_finish_close (self);
++      return;                       /* w->feat freed by gx_work_free */
++    }
++
++  GxTask *t = fpi_ssm_get_data (ssm);
++  GxSiftFeatures *f = g_steal_pointer (&w->feat);
++
++  for (guint e = 0; w->extra && e < w->extra->len; e++)
++    g_ptr_array_add (t->views, g_ptr_array_index (w->extra, e));
++  if (w->extra)
++    g_ptr_array_set_free_func (w->extra, NULL);       /* ownership moved */
++
++  if (!f || f->n < 8)
++    {
++      /* Tell the two causes apart: they call for opposite gestures.
++       * The image capture takes about 1.4 s, so a finger pressed and
++       * immediately lifted does trigger detection, but the image is taken
++       * once it has gone — contrast around 5, the empty level. Reporting
++       * "not centred" there sends the user to fix the wrong thing, which
++       * is glaring the first time someone unfamiliar tries the sensor. */
++      FpDeviceRetry why = gx_finger_present (self) ?
++                          FP_DEVICE_RETRY_CENTER_FINGER :
++                          FP_DEVICE_RETRY_TOO_SHORT;
++
++      g_clear_pointer (&f, gx_sift_free);
++      if (why == FP_DEVICE_RETRY_TOO_SHORT)
++        fp_info ("finger lifted before the capture finished");
++
++      if (t->verifying)
++        {
++          fpi_ssm_mark_failed (ssm, fpi_device_retry_new (why));
++          return;
++        }
++      /* unusable press: ask again without advancing the stage */
++      fpi_device_enroll_progress (dev, t->stage, NULL,
++                                  fpi_device_retry_new (why));
++    }
++  else if (t->verifying)
++    {
++      /* Score the capture, once.
++       *
++       * This used to re-capture while the finger was still down whenever
++       * the score came out below the threshold, keeping the BEST score of
++       * up to three captures. That is a security defect, not a comfort
++       * feature: retrying until the score passes turns one decision into
++       * the maximum of several draws, and pam_fprintd multiplies it again
++       * with max-tries=3 — up to nine draws to clear a single threshold.
++       * Measured: a foreign finger (middle, not enrolled) scored 3 on the
++       * first capture and 20 on the second, and was accepted at a
++       * threshold of 15, where the documented impostor ceiling is 8.
++       *
++       * A weak capture is now simply a weak result. Unusable captures are
++       * still retried above, but on IMAGE QUALITY (too few points), never
++       * on the score — a retry must never be conditioned on how close the
++       * previous attempt came to authenticating. */
++      FpPrint *tmpl = NULL;
++      g_autoptr(GPtrArray) views = NULL;
++      g_autoptr(GPtrArray) extra = NULL;
++      g_autofree gchar *apath = NULL;
++      guint i;
++
++      fpi_device_get_verify_data (dev, &tmpl);
++      views = gx_views_from_print (tmpl);
++      /* A template carrying more views than the matcher was calibrated for
++       * is cut back, not trusted: the threshold does not rise past
++       * GX_MAX_VIEWS. */
++      if (views->len > GX_MAX_VIEWS)
++        g_ptr_array_remove_range (views, GX_MAX_VIEWS,
++                                  views->len - GX_MAX_VIEWS);
++      apath = gx_adapt_path (tmpl);
++      extra = gx_adapt_load (apath);
++      gx_adapt_cap (extra, views->len);
++      t->threshold = gx_match_threshold (views->len + extra->len);
++
++      /* Fusion des vues : on cumule les points de la capture qu'AU MOINS
++       * at least one template view explains, instead of keeping only
++       * the best per-view score. A press often overlaps several views
++       * without covering any of them decisively, and taking the maximum
++       * threw that distributed evidence away. Spurious matches from a
++       * foreign finger do not accumulate the same way: they fail the
++       * geometric check. Measured, borderline poses go from 5 to 18
++       * matches while the impostor drops from 3 to 0. */
++      {
++        g_autofree guint8 *seen = g_new0 (guint8, f->n ? f->n : 1);
++        int fused = 0;
++
++        for (i = 0; i < views->len; i++)
++          gx_sift_match_mask (g_ptr_array_index (views, i), f, seen);
++        for (i = 0; i < extra->len; i++)
++          gx_sift_match_mask (g_ptr_array_index (extra, i), f, seen);
++        for (i = 0; i < f->n; i++)
++          fused += seen[i];
++        if (fused > t->best)
++          t->best = fused;
++      }
++
++      t->tries++;
++      g_clear_pointer (&t->probe, gx_sift_free);
++      t->probe = f;
++      fp_info ("verify: attempt %d -> %d matches (threshold %d)",
++               t->tries, t->best, t->threshold);
++
++    }
++  else
++    {
++      int dx = 0, dy = 0, sc = 0, x0, y0, x1, y1;
++      guint np = 0;
++      gboolean placed;
++
++      g_ptr_array_add (t->views, f);
++      t->stage++;
++
++      /* Register this view against the coverage acquired so far. The
++       * result is logged rather than returned: enrol progress carries no
++       * message, and the desktop enrolment dialogue shows nothing but a
++       * counter anyway. A dedicated tool reads these lines and shows the
++       * user which part of the finger to present next. */
++      if (!t->island)
++        t->island = gx_sift_island_new ();
++      placed = gx_sift_island_add (t->island, f, &dx, &dy, &sc);
++      gx_sift_island_extent (t->island, &x0, &y0, &x1, &y1, &np);
++
++      if (placed)
++        fp_info ("enroll: stage=%d at=%d,%d overlap=%d "
++                 "extent=%dx%d points=%u",
++                 t->stage, dx, dy, sc, x1 - x0, y1 - y0, np);
++      else
++        fp_info ("enroll: stage=%d at=? overlap=%d "
++                 "extent=%dx%d points=%u (disjoint area)",
++                 t->stage, sc, x1 - x0, y1 - y0, np);
++
++      fpi_device_enroll_progress (dev, t->stage, NULL, NULL);
++    }
++  /* Capture done: we no longer need the finger, only its release.
++   * PRESENT without NEEDED is the "you may lift now" signal. */
++  fpi_device_report_finger_status (dev, FP_FINGER_STATUS_PRESENT);
++
++  /* Verification takes a single capture, so its result is known now. Waiting
++   * for the lift first held the answer back until the user took the finger
++   * away, which reads as the sensor not working. Only enrolment, which needs
++   * a fresh press per stage, waits for the release. */
++  if (t->verifying)
++    {
++      fpi_ssm_jump_to_state (ssm, GX_ST_DONE);
++      return;
++    }
++  t->polls = 0;
++  self->poll_id = g_timeout_add (GX_POLL_MS, gx_poll_off, ssm);
++}
++
++static void
++gx_run_state (FpiSsm *ssm, FpDevice *dev)
++{
++  FpiDeviceGoodixTls *self = FPI_DEVICE_GOODIXTLS (dev);
++  GxTask *t = fpi_ssm_get_data (ssm);
++
++  switch (fpi_ssm_get_cur_state (ssm))
++    {
++    case GX_ST_SESSION:
++      gx_run_async (ssm, dev, gx_session_thread, gx_session_done);
++      break;
++
++    case GX_ST_WAIT_ON:
++      t->polls = 0;
++      fpi_device_report_finger_status (dev, FP_FINGER_STATUS_NEEDED);
++      self->poll_id = g_timeout_add (GX_POLL_MS, gx_poll_on, ssm);
++      break;                       /* the poll drives the next state */
++
++    case GX_ST_CAPTURE:
++      gx_run_async (ssm, dev, gx_capture_thread, gx_capture_done);
++      break;
++
++    case GX_ST_WAIT_OFF:
++      /* only reached by jumping here; the poll drives what follows */
++      break;
++
++    case GX_ST_DONE:
++      fpi_ssm_mark_completed (ssm);
++      break;
++    }
++}
++
++/* --- enrolment completion ------------------------------------------ */
++static void
++gx_enroll_done (FpiSsm *ssm, FpDevice *dev, GError *error)
++{
++  GxTask *t = fpi_ssm_get_data (ssm);
++  FpPrint *print = NULL;
++
++  if (error)
++    {
++      fpi_device_enroll_complete (dev, NULL, error);
++      return;
++    }
++  if (!t->views || t->views->len < 3)
++    {
++      fpi_device_enroll_complete (dev, NULL,
++                                  fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL,
++                                                            "too few usable views"));
++      return;
++    }
++
++  fpi_device_get_enroll_data (dev, &print);
++  fpi_print_set_type (print, FPI_PRINT_RAW);
++  fpi_print_set_device_stored (print, FALSE);
++  g_object_set (print, "fpi-data", gx_views_to_variant (t->views), NULL);
++
++  /* The template changes: views acquired under the authority of the old one
++   * are no longer legitimate, so start from an empty store. */
++  gx_adapt_clear (print);
++  fpi_device_enroll_complete (dev, g_object_ref (print), NULL);
++}
++
++/* ------------------------------------------------------------------ */
++/*  Device operations                                                  */
++/* ------------------------------------------------------------------ */
++
++/* Reads the pre-shared key, with recovery. After a heavy session — a dozen or
++ * so captures — the sensor refuses long exchanges such as the memory read while
++ * short commands still work. It then needs a reset, and from the third attempt
++ * a full reopen of the spidev node to clear the kernel driver's state too. */
++static void
++gx_spi_setup (FpiDeviceGoodixTls *self)
++{
++  guint8 mode = SPI_MODE_0, bits = 8;
++  guint32 speed = self->transport->spi_hz;
++
++  ioctl (self->spi_fd, SPI_IOC_WR_MODE, &mode);
++  ioctl (self->spi_fd, SPI_IOC_WR_BITS_PER_WORD, &bits);
++  ioctl (self->spi_fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
++}
++
++/* spidev's bufsiz caps every transfer; the image needs about 22 kB in one. */
++static gboolean
++gx_check_bufsiz (GError **error)
++{
++  g_autofree gchar *txt = NULL;
++  guint v = 0;
++
++  if (g_file_get_contents ("/sys/module/spidev/parameters/bufsiz", &txt,
++                           NULL, NULL))
++    v = (guint) g_ascii_strtoull (txt, NULL, 10);
++  if (gx_bufsiz_ok (v))
++    return TRUE;
++  g_set_error (error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_GENERAL,
++               "spidev bufsiz is %u, the image needs %u: boot with "
++               "spidev.bufsiz=65536", v, GX_RX_MAX);
++  return FALSE;
++}
++
++static gboolean
++gx_read_psk (FpiDeviceGoodixTls *self, const gchar *path)
++{
++  int att;
++
++  for (att = 1; att <= 6; att++)
++    {
++      guint8 ty, junk[256];
++
++      /* Drain: one pending frame shifts every subsequent read. */
++      while (gx_read_frame (self, &ty, junk, sizeof junk) > 0)
++        ;
++
++      if (gx_mem_read (self, self->model->psk_addr, GOODIX_PSK_LEN, self->psk))
++        {
++          if (att > 1)
++            fp_info ("PSK read on attempt %d", att);
++          return TRUE;
++        }
++
++      if (att >= 3 && path)
++        {
++          /* Full reopen, to clear the kernel driver's state. */
++          if (self->spi_fd >= 0)
++            close (self->spi_fd);
++          self->spi_fd = open (path, O_RDWR);
++          if (self->spi_fd < 0)
++            return FALSE;
++          gx_spi_setup (self);
++          flock (self->spi_fd, LOCK_EX | LOCK_NB);
++        }
++
++      gx_gpio_reset (self);
++    }
++  return FALSE;
++}
++
++static void
++gx_open_fail (FpiDeviceGoodixTls *self, GError *err)
++{
++  if (self->spi_fd >= 0)
++    {
++      close (self->spi_fd);
++      self->spi_fd = -1;
++    }
++  self->model = NULL;
++  fpi_device_open_complete (FP_DEVICE (self), err);
++}
++
++static void
++gx_dev_open (FpDevice *dev)
++{
++  FpiDeviceGoodixTls *self = FPI_DEVICE_GOODIXTLS (dev);
++  GError *err = NULL;
++  const gchar *path;
++  gchar fw[64] = "";
++  guint64 idx = fpi_device_get_driver_data (dev);
++
++  self->model = NULL;
++  self->transport = idx < G_N_ELEMENTS (gx_acpi_ids) ?
++                    gx_model_transport (gx_acpi_ids[idx]) : NULL;
++  if (!self->transport)
++    {
++      fpi_device_open_complete (dev, fpi_device_error_new_msg (
++                                  FP_DEVICE_ERROR_NOT_SUPPORTED, "no model entry for this sensor"));
++      return;
++    }
++  if (!gx_check_bufsiz (&err))
++    {
++      fpi_device_open_complete (dev, err);
++      return;
++    }
++
++  /* Drop stores whose fprintd template was deleted meanwhile. */
++  gx_adapt_sweep ();
++
++  path = fpi_device_get_udev_data (dev, FPI_DEVICE_UDEV_SUBTYPE_SPIDEV);
++  self->spi_fd = open (path, O_RDWR);
++  if (self->spi_fd < 0)
++    {
++      g_set_error (&err, G_IO_ERROR, g_io_error_from_errno (errno),
++                   "cannot open spidev node %s", path);
++      fpi_device_open_complete (dev, err);
++      return;
++    }
++
++  /* Exclusive lock. Nothing stops two processes opening the same spidev node,
++   * and two interleaved dialogues corrupt frame boundaries — the observed
++   * symptoms being failed TLS handshakes and an unreadable key. Refusing the
++   * open outright is better than corrupting the bus. */
++  if (flock (self->spi_fd, LOCK_EX | LOCK_NB) != 0)
++    {
++      close (self->spi_fd);
++      self->spi_fd = -1;
++      fpi_device_open_complete (dev, fpi_device_error_new_msg (
++                                  FP_DEVICE_ERROR_BUSY, "sensor already in use by another process"));
++      return;
++    }
++
++  gx_spi_setup (self);
++  /* Start from what this unit is known to need; without a file, fdt_abs is the
++   * hard-coded floor and timing_scale nominal, and both adapt per unit. */
++  self->fdt_known = gx_fdt_load ();
++  self->fdt_abs = self->fdt_known ? self->fdt_known - GOODIX_FDT_ABS_MARGIN :
++                  GOODIX_FDT_ABS;
++  self->have_fdt = FALSE;
++  self->capture_failed = FALSE;
++  self->timing_scale = gx_timing_load (&self->timing_clean);
++  self->timing_saved = self->timing_scale;
++  if (self->timing_scale != 100)
++    fp_info ("starting from learned timing scale %d%%", self->timing_scale);
++
++  gx_gpio_reset (self);
++
++  /* Version first, and nothing beyond read-only commands until it matched an
++   * entry: the key address, config and capture sequence are per firmware. */
++  if (!gx_read_fw_version (self, fw, sizeof fw))
++    {
++      gx_open_fail (self, fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
++                                                    "%s: no firmware version",
++                                                    self->transport->acpi_id));
++      return;
++    }
++  self->model = gx_model_lookup (self->transport->acpi_id, fw);
++  if (!self->model)
++    {
++      gx_open_fail (self, fpi_device_error_new_msg (FP_DEVICE_ERROR_NOT_SUPPORTED,
++                                                    "%s: unknown firmware %s, please report",
++                                                    self->transport->acpi_id, fw));
++      return;
++    }
++  if (self->model->img_w != GOODIX_IMG_WIDTH ||
++      self->model->img_h != GOODIX_IMG_HEIGHT ||
++      self->model->psk_len != GOODIX_PSK_LEN)
++    {
++      gx_open_fail (self, fpi_device_error_new_msg (FP_DEVICE_ERROR_NOT_SUPPORTED,
++                                                    "%s: model geometry not built in",
++                                                    fw));
++      return;
++    }
++  fp_info ("%s firmware: %s", self->model->acpi_id, fw);
++
++  if (!gx_read_psk (self, path))
++    {
++      gx_open_fail (self, fpi_device_error_new_msg (FP_DEVICE_ERROR_PROTO,
++                                                    "key read failed; the TLS channel cannot be opened"));
++      return;
++    }
++
++  fpi_device_open_complete (dev, NULL);
++}
++
++static void
++gx_dev_close (FpDevice *dev)
++{
++  FpiDeviceGoodixTls *self = FPI_DEVICE_GOODIXTLS (dev);
++
++  /* If a work thread is still running it is using spi_fd / tls / bg_frame;
++   * freeing them here would pull the ground out from under it — the shutdown
++   * segfault. Defer the whole teardown to the thread's completion callback,
++   * which the main loop runs only once the thread has returned. */
++  if (self->worker_active)
++    {
++      self->close_pending = TRUE;
++      return;
++    }
++  gx_finish_close (self);
++}
++
++/* --- verification completion --------------------------------------- */
++static void
++gx_verify_done (FpiSsm *ssm, FpDevice *dev, GError *error)
++{
++  GxTask *t = fpi_ssm_get_data (ssm);
++  FpPrint *template = NULL;
++
++  g_autoptr(GPtrArray) views = NULL;
++  int best = 0;
++
++  if (error)
++    {
++      if (error->domain == FP_DEVICE_RETRY)
++        fpi_device_verify_report (dev, FPI_MATCH_ERROR, NULL, g_steal_pointer (&error));
++      fpi_device_verify_complete (dev, error);
++      return;
++    }
++  if (!t->probe)
++    {
++      fpi_device_verify_report (dev, FPI_MATCH_ERROR, NULL,
++                                fpi_device_retry_new (FP_DEVICE_RETRY_GENERAL));
++      fpi_device_verify_complete (dev, NULL);
++      return;
++    }
++
++  best = t->best;
++  fpi_device_get_verify_data (dev, &template);
++  views = gx_views_from_print (template);
++  {
++    g_autofree gchar *apath = gx_adapt_path (template);
++    g_autoptr(GPtrArray) extra = gx_adapt_load (apath);
++    guint stored = extra->len;
++
++    gx_adapt_cap (extra, views->len);
++    fp_info ("verify: %d matches in %d attempt(s) "
++             "(threshold %d, %u views + %u acquired)", best, t->tries,
++             t->threshold, views->len, extra->len);
++
++    /* Acquisition window. The lower bound means certain identity; the upper
++     * bound means the area is already well covered and would teach nothing.
++     * Weak poses — precisely the ones missing from the template — are excluded
++     * on purpose, being too uncertain to trust. They enter the window by
++     * themselves as the store fills out and lifts their score, so coverage
++     * grows step by step without ever relaxing the safety constraint. */
++    if (best >= GX_ADAPT_MIN (t->threshold) &&
++        best <= (int) (GX_ADAPT_MAX_FRAC * t->probe->n) &&
++        views->len + stored < GX_MAX_VIEWS)
++      {
++        if (gx_adapt_append (apath, t->probe))
++          fp_info ("adaptive store: view acquired (%u/%u)", stored + 1,
++                   GX_MAX_VIEWS - views->len);
++      }
++  }
++  fpi_device_verify_report (dev,
++                            best >= t->threshold ? FPI_MATCH_SUCCESS :
++                            FPI_MATCH_FAIL,
++                            NULL, NULL);
++  fpi_device_verify_complete (dev, NULL);
++}
++
++static void
++gx_dev_enroll (FpDevice *dev)
++{
++  FpiSsm *ssm = fpi_ssm_new (dev, gx_run_state, GX_ST_NUM);
++  GxTask *t = g_new0 (GxTask, 1);
++  FpPrint *print = NULL;
++  FpiPrintType ptype = FPI_PRINT_UNDEFINED;
++
++  t->views = g_ptr_array_new_with_free_func ((GDestroyNotify) gx_sift_free);
++
++  /* Updating an existing print: keep its views and add the new ones.
++   * Note this path is unused with fprintd, whose enrol always supplies a fresh
++   * FpPrint, so in practice re-enrolling REPLACES the template. */
++  fpi_device_get_enroll_data (dev, &print);
++  if (print)
++    g_object_get (print, "fpi-type", &ptype, NULL);
++  if (ptype != FPI_PRINT_UNDEFINED)
++    {
++      g_autoptr(GPtrArray) old = gx_views_from_print (print);
++      guint i, keep = gx_views_keep (old->len, GX_ENROLL_VIEWS, GX_MAX_VIEWS);
++
++      /* Never past GX_MAX_VIEWS: the threshold stops rising there, so more
++       * fused views would only raise the false accept rate. */
++      for (i = 0; i < keep; i++)
++        g_ptr_array_add (t->views, g_ptr_array_steal_index (old, 0));
++      if (t->views->len)
++        fp_info ("enroll: kept %u existing views", t->views->len);
++    }
++  fpi_ssm_set_data (ssm, t, (GDestroyNotify) gx_task_free);
++  fpi_ssm_start (ssm, gx_enroll_done);
++}
++
++static void
++gx_dev_verify (FpDevice *dev)
++{
++  FpiSsm *ssm = fpi_ssm_new (dev, gx_run_state, GX_ST_NUM);
++  GxTask *t = g_new0 (GxTask, 1);
++
++  t->verifying = TRUE;
++  fpi_ssm_set_data (ssm, t, (GDestroyNotify) gx_task_free);
++  fpi_ssm_start (ssm, gx_verify_done);
++}
++
++/* ------------------------------------------------------------------ */
++
++static void
++fpi_device_goodixtls_init (FpiDeviceGoodixTls *self)
++{
++  self->spi_fd = -1;
++}
++
++static void
++fpi_device_goodixtls_finalize (GObject *object)
++{
++  FpiDeviceGoodixTls *self = FPI_DEVICE_GOODIXTLS (object);
++
++  if (self->spi_fd >= 0)
++    close (self->spi_fd);
++  g_clear_pointer (&self->bg_frame, g_free);
++  G_OBJECT_CLASS (fpi_device_goodixtls_parent_class)->finalize (object);
++}
++
++static void
++fpi_device_goodixtls_class_init (FpiDeviceGoodixTlsClass *klass)
++{
++  FpDeviceClass *dev_class = FP_DEVICE_CLASS (klass);
++
++  dev_class->id = "goodixtls";
++  dev_class->full_name = "Goodix GXFP5187/GXFP5197 SPI (TLS-PSK)";
++  dev_class->type = FP_DEVICE_TYPE_UDEV;
++  dev_class->id_table = goodixtls_id_table;
++  dev_class->scan_type = FP_SCAN_TYPE_PRESS;
++  dev_class->nr_enroll_stages = GX_ENROLL_STAGES;
++
++  dev_class->temp_hot_seconds = -1;   /* slow capture: no thermal throttling */
++
++  dev_class->open = gx_dev_open;
++  dev_class->close = gx_dev_close;
++  dev_class->enroll = gx_dev_enroll;
++  dev_class->verify = gx_dev_verify;
++
++  G_OBJECT_CLASS (klass)->finalize = fpi_device_goodixtls_finalize;
++
++  /* Derives the advertised features from the vfuncs implemented above.
++   * Must be called LAST: otherwise the device is announced without
++   * verification support. FpImageDevice did this for us; deriving straight
++   * from FpDevice makes it the driver's job. */
++  fpi_device_class_auto_initialize_features (dev_class);
++
++  /* Advertise that an existing print can be updated rather than replaced,
++   * for callers that pass one in. */
++  dev_class->features |= FP_DEVICE_FEATURE_UPDATE_PRINT;
++}
+diff --git a/libfprint/drivers/goodixtls/goodixtls.h b/libfprint/drivers/goodixtls/goodixtls.h
+new file mode 100644
+index 00000000..418cdd64
+--- /dev/null
++++ b/libfprint/drivers/goodixtls/goodixtls.h
+@@ -0,0 +1,104 @@
++/*
++ * Goodix GXFP5187/GXFP5197 SPI (TLS-PSK) driver for libfprint
++ *
++ * Copyright (C) 2026 Benjamin Allègre (https://github.com/Sigfrodr)
++ *
++ * GXFP5197 support and the per-model table:
++ * Copyright (C) 2026 Matthias Gruss
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#pragma once
++
++#include "drivers_api.h"
++#include "goodix_model.h"
++
++/* Sensor geometry, cross-checked against the vendor driver's own logs. Both
++ * models share it; gx_dev_open checks the model entry agrees. */
++#define GOODIX_IMG_WIDTH 132
++#define GOODIX_IMG_HEIGHT 112
++#define GOODIX_IMG_PIXELS (GOODIX_IMG_WIDTH * GOODIX_IMG_HEIGHT)
++
++/* SPI framing: 0xA0 is a cleartext message, 0xB0 carries a TLS record. */
++#define GOODIX_PKT_PLAIN 0xA0
++#define GOODIX_PKT_TLS 0xB0
++
++/*
++ * Command table. The first body byte is (cmd0 << 4) | (cmd1 << 1), with
++ * cmd0 being: 0x2 image, 0x3 finger detect, 0x5 navigation, 0x8 register,
++ * 0x9 chip, 0xA MCU, 0xD TLS connection, 0xF firmware update / memory.
++ */
++#define GOODIX_CMD_IMAGE 0x20
++#define GOODIX_CMD_FDT_DOWN 0x36
++#define GOODIX_CMD_NAV 0x50
++#define GOODIX_CMD_REG 0x82
++#define GOODIX_CMD_ENABLE_CHIP 0x96
++#define GOODIX_CMD_MCU_STATE 0xAE
++#define GOODIX_CMD_UPLOAD_CFG 0x90
++#define GOODIX_CMD_REQUEST_TLS 0xD0
++#define GOODIX_CMD_TLS_OK 0xD4
++#define GOODIX_CMD_FW_VERSION 0xA8
++#define GOODIX_CMD_MEM_READ 0xF2      /* arbitrary memory read: [addr32][len32] */
++
++/*
++ * The pre-shared key is a 48-byte PMK that the sensor decrypts into its own RAM
++ * at boot; the driver reads it back with the memory-read command above. This is
++ * what lets the TLS channel be established on Linux without Intel ME, SGX or
++ * the in-application-programming mode that other approaches rely on — and it is
++ * non-destructive, unlike rewriting the key through IAP.
++ *
++ * TLS identity is "Client_identity", ciphersuite TLS-PSK-WITH-AES-128-CBC-SHA256.
++ * Note the roles are reversed from what one might expect: the SENSOR is the TLS
++ * client and the host is the server.
++ */
++#define GOODIX_PSK_LEN 48             /* per model in GxModel; all are 48 */
++#define GOODIX_TLS_IDENTITY "Client_identity"
++
++/* Finger detection reads twelve 16-bit values, which a finger pulls DOWN.
++ *
++ * Measured in use, logging every poll: idle sits at a mean of 363 with a drop
++ * of 0, while a finger gives a mean of 266 to 314 and a drop of 48 to 86. The
++ * original thresholds of 50 and 320 sat right at the finger end of that range,
++ * so a light or slightly offset press produced a drop of about 45 at a mean of
++ * about 325 and fired NEITHER test — the finger simply went unnoticed until
++ * the user lifted and pressed again.
++ *
++ * They are now placed between the two populations instead. Loosening them is
++ * cheap: a spurious detection costs one wasted capture, which the contrast
++ * check then rejects, whereas a missed detection is a visible failure. */
++#define GOODIX_FDT_DROP 30
++
++/* Absolute threshold on the mean of those twelve values. Needed because the
++ * relative threshold above is useless when the baseline itself was taken with
++ * a finger resting on the sensor — exactly when detection would otherwise fail
++ * silently.
++ *
++ * This is NOT used as a fixed number at runtime: it is the fallback the driver
++ * starts from, then recomputes per unit as (measured idle mean − margin) once
++ * it has a baseline. On the author's sensor idle sits near 364, so the derived
++ * floor lands near 340 — the value this used to be hard-coded to. On another
++ * unit whose idle sits elsewhere, a fixed 340 was the portability bug behind
++ * the "huge amount of failed attempts" report: a sensor idling below it reads
++ * as a finger on every poll and captures noise. See self->fdt_abs. */
++#define GOODIX_FDT_ABS 340
++
++/* How far below the measured idle mean the per-unit absolute floor sits.
++ * Chosen so idle≈364 − margin reproduces the previous 340 on the author's
++ * unit; it is the gap between the idle population and the weakest finger
++ * press, kept roughly centred between the two. */
++#define GOODIX_FDT_ABS_MARGIN 24
+diff --git a/libfprint/fprint-list-udev-rules.c b/libfprint/fprint-list-udev-rules.c
+index 45761daf..424dde2e 100644
+--- a/libfprint/fprint-list-udev-rules.c
++++ b/libfprint/fprint-list-udev-rules.c
+@@ -49,7 +49,7 @@ print_driver (const FpDeviceClass *cls)
+       if (num_printed == 0)
+         g_print ("# %s\n", cls->full_name);
+ 
+-      g_print ("ACTION==\"add|change\", SUBSYSTEM==\"spi\", ENV{MODALIAS}==\"acpi:%s:\", RUN{builtin}+=\"kmod load spi:spidev\", RUN+=\"/bin/sh -c 'echo spidev > %%S%%p/driver_override && echo %%k > %%S%%p/subsystem/drivers/spidev/bind'\"\n",
++      g_print ("ACTION==\"add|change\", SUBSYSTEM==\"spi\", ENV{MODALIAS}==\"acpi:%s:*\", RUN{builtin}+=\"kmod load spi:spidev\", RUN+=\"/bin/sh -c 'echo spidev > %%S%%p/driver_override && echo %%k > %%S%%p/subsystem/drivers/spidev/bind'\"\n",
+                entry->spi_acpi_id);
+       num_printed++;
+     }
+diff --git a/libfprint/meson.build b/libfprint/meson.build
+index f11533ca..c2e57a43 100644
+--- a/libfprint/meson.build
++++ b/libfprint/meson.build
+@@ -122,6 +122,13 @@ driver_sources = {
+     'elan' : files('drivers/elan.c'),
+     'elanmoc' : files('drivers/elanmoc/elanmoc.c'),
+     'elanspi' : files('drivers/elanspi.c'),
++    'goodixtls' : files(
++        'drivers/goodixtls/goodixtls.c',
++        'drivers/goodixtls/goodix_model.c',
++        'drivers/goodixtls/goodix_tls.c',
++        'drivers/goodixtls/goodix_sift.c',
++        'drivers/goodixtls/config_pcap.c',
++    ),
+     'nb1010' : files('drivers/nb1010.c'),
+     'virtual_image' : files('drivers/virtual-image.c'),
+     'virtual_device' : files('drivers/virtual-device.c'),
+diff --git a/meson.build b/meson.build
+index ab09dc1d..de78266f 100644
+--- a/meson.build
++++ b/meson.build
+@@ -150,6 +150,7 @@ drivers_info = {
+ 
+     # SPI driver (non-optional if SPI is available)
+     'elanspi': { 'spi': true, 'helper': ['udev'], 'optional': not have_spi },
++    'goodixtls': { 'spi': true, 'helper': ['udev', 'openssl'], 'optional': not have_spi },
+ 
+     # Virtual drivers (test-only, optional)
+     'virtual_image': { 'virtual': true, 'helper': ['virtual'], 'optional': true },
+diff --git a/tests/meson.build b/tests/meson.build
+index aad0675e..4a160d12 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -389,11 +389,19 @@ test('udev-hwdb',
+      env: hwdb_envs,
+ )
+ 
++if install_udev_rules
++    test('udev-rules',
++        find_program('test-udev-rules.sh'),
++        depends: udev_rules,
++        suite: ['data', 'no-valgrind'],
++        env: ['UDEV_RULES=' + udev_rules.full_path()])
++endif
++
+ appstreamcli = find_program('appstreamcli', required: false)
+ if appstreamcli.found()
+     test('metainfo-validate',
+         appstreamcli,
+-        args: ['validate', metainfo_generator],
++        args: ['validate', '--no-net', metainfo_generator],
+         depends: metainfo_generator,
+         suite: ['data', 'no-valgrind'],
+     )
+@@ -468,3 +476,23 @@ if valgrind.found() and libfprint_sanitizers.length() == 0
+             'LIBFPRINT_TEST_WRAPPER=' + ' '.join(libfprint_wrapper),
+         ])
+ endif
++
++# The driver's protocol helpers and model table carry no device state, so the
++# test builds them directly instead of linking the drivers archive.
++if 'goodixtls' in drivers
++    test_goodixtls = executable('test-goodixtls',
++        sources: [
++            'test-goodixtls.c',
++            '../libfprint/drivers/goodixtls/goodix_model.c',
++            '../libfprint/drivers/goodixtls/config_pcap.c',
++        ],
++        dependencies: [ libfprint_private_dep ],
++        c_args: common_cflags,
++        install: false,
++    )
++    test('goodixtls',
++        test_goodixtls,
++        suite: ['unit-tests'],
++        env: envs,
++    )
++endif
+diff --git a/tests/test-goodixtls.c b/tests/test-goodixtls.c
+new file mode 100644
+index 00000000..4e8b6ed0
+--- /dev/null
++++ b/tests/test-goodixtls.c
+@@ -0,0 +1,187 @@
++/*
++ * Unit tests for the goodixtls driver's protocol helpers and model table
++ *
++ * Copyright (C) 2026 Matthias Gruss
++ *
++ * SPDX-License-Identifier: LGPL-2.1-or-later
++ *
++ * Vectors are the ones the Python probe (tools/gxprobe) was tested with and
++ * that the GXFP5197 answered on the bench.
++ */
++
++#include <glib.h>
++
++#include "drivers/goodixtls/goodix_model.h"
++
++static void
++test_lookup_5197_13010 (void)
++{
++  const GxModel *m = gx_model_lookup ("GXFP5197", "GF3288_ST411SEC_APP_13010");
++
++  g_assert_nonnull (m);
++  g_assert_cmphex (m->psk_addr, ==, 0x20007f14);
++  g_assert_cmpuint (m->psk_len, ==, 48);
++  g_assert_cmphex (m->mem_bias, ==, 0x08000000);
++  g_assert_true (m->split_header);
++  g_assert_cmpuint (m->img_w, ==, 132);
++  g_assert_cmpuint (m->img_h, ==, 112);
++  g_assert_cmpuint (m->reset_line_default, ==, 58);
++  g_assert_cmpuint (m->config_len, ==, 256);
++  g_assert_true (gx_config_valid (m->config, m->config_len));
++}
++
++static void
++test_lookup_5187_11033 (void)
++{
++  const GxModel *m = gx_model_lookup ("GXFP5187", "GF3288_ST411SEC_APP_11033");
++
++  g_assert_nonnull (m);
++  g_assert_cmphex (m->psk_addr, ==, 0x20007f0c);
++  g_assert_false (m->split_header);
++}
++
++/* Unknown firmware must never get stage-B commands: no entry, no guessing. */
++static void
++test_lookup_unknown (void)
++{
++  g_assert_null (gx_model_lookup ("GXFP5197", "GF3288_ST411SEC_APP_99999"));
++  g_assert_null (gx_model_lookup ("GXFP9999", "GF3288_ST411SEC_APP_13010"));
++  g_assert_null (gx_model_lookup ("GXFP5197", ""));
++  g_assert_null (gx_model_lookup ("GXFP5197", NULL));
++}
++
++/* Before the firmware is known only the transport may be chosen. */
++static void
++test_transport (void)
++{
++  g_assert_true (gx_model_transport ("GXFP5197")->split_header);
++  g_assert_false (gx_model_transport ("GXFP5187")->split_header);
++  g_assert_null (gx_model_transport ("GXFP9999"));
++}
++
++static void
++test_body_cksum (void)
++{
++  static const guint8 b[] = { 0xa8, 0x03, 0x00, 0x70, 0xdc };
++
++  g_assert_cmphex (goodix_body_cksum (b, sizeof b), ==, 0xb3);
++}
++
++static void
++test_frame_header (void)
++{
++  guint8 h[4];
++
++  gx_frame_header (0xa0, 8, h);
++  g_assert_cmphex (h[0], ==, 0xa0);
++  g_assert_cmphex (h[1], ==, 0x08);
++  g_assert_cmphex (h[2], ==, 0x00);
++  g_assert_cmphex (h[3], ==, 0xa8);
++  gx_frame_header (0xb0, 0x1234, h);
++  g_assert_cmphex (h[3], ==, 0xf6);
++}
++
++static void
++test_decode_12bit (void)
++{
++  static const guint8 in[] = { 0x21, 0x43, 0x65, 0x87, 0xa9, 0xcb };
++  guint16 out[4] = { 0 };
++
++  gx_decode_12bit (in, sizeof in, out, 4);
++  g_assert_cmphex (out[0], ==, 0x143);
++  g_assert_cmphex (out[1], ==, 0x872);
++  g_assert_cmphex (out[2], ==, 0xb65);
++  g_assert_cmphex (out[3], ==, 0xa9c);
++}
++
++/* The image record is about 22 kB in one transfer; spidev's default 4096
++ * truncates it. */
++static void
++test_bufsiz (void)
++{
++  g_assert_false (gx_bufsiz_ok (4096));
++  g_assert_true (gx_bufsiz_ok (65536));
++}
++
++static void
++test_mem_read_cmd (void)
++{
++  const GxModel *m = gx_model_lookup ("GXFP5197", "GF3288_ST411SEC_APP_13010");
++  static const guint8 want[] = {
++    0xf2, 0x09, 0x00, 0x14, 0x7f, 0x00, 0x18, 0x30, 0x00, 0x00, 0x00
++  };
++  guint8 c[12];
++
++  gx_mem_read_cmd (m->psk_addr, m->psk_len, m->mem_bias, c);
++  g_assert_cmpmem (c, 11, want, sizeof want);
++  g_assert_cmphex (c[11], ==, goodix_body_cksum (want, sizeof want));
++}
++
++static void
++test_mem_reply (void)
++{
++  guint8 r[3 + 4 + 1] = { 0xf2, 0x05, 0x00, 1, 2, 3, 4 };
++  guint8 out[4] = { 0 };
++  static const guint8 want[] = { 1, 2, 3, 4 };
++
++  r[7] = goodix_body_cksum (r, 7);
++  g_assert_true (gx_mem_reply_parse (r, sizeof r, out, 4));
++  g_assert_cmpmem (out, 4, want, 4);
++
++  r[4] ^= 1;                                    /* checksum now wrong */
++  g_assert_false (gx_mem_reply_parse (r, sizeof r, out, 4));
++  r[4] ^= 1;
++  g_assert_false (gx_mem_reply_parse (r, sizeof r, out, 3));   /* length */
++  r[0] = 0xb0;                                  /* an ACK, not the data */
++  g_assert_false (gx_mem_reply_parse (r, sizeof r, out, 4));
++}
++
++static void
++test_config_valid (void)
++{
++  guint8 blk[256] = { 0x18 };
++  guint16 s = 0xa5a5;
++  int i;
++
++  for (i = 0; i < 254; i += 2)
++    s += blk[i] | (blk[i + 1] << 8);
++  s = -s;
++  blk[254] = s & 0xff;
++  blk[255] = s >> 8;
++  g_assert_true (gx_config_valid (blk, sizeof blk));
++  blk[10] ^= 1;
++  g_assert_false (gx_config_valid (blk, sizeof blk));
++  g_assert_false (gx_config_valid (blk, 255));
++}
++
++/* A template never grows past the view count the matcher was calibrated for. */
++static void
++test_views_keep (void)
++{
++  g_assert_cmpuint (gx_views_keep (20, 20, 30), ==, 10);
++  g_assert_cmpuint (gx_views_keep (5, 20, 30), ==, 5);
++  g_assert_cmpuint (gx_views_keep (40, 0, 30), ==, 30);
++  g_assert_cmpuint (gx_views_keep (10, 30, 30), ==, 0);
++  g_assert_cmpuint (gx_views_keep (10, 35, 30), ==, 0);
++}
++
++int
++main (int argc, char *argv[])
++{
++  g_test_init (&argc, &argv, NULL);
++
++  g_test_add_func ("/goodixtls/lookup/5197-13010", test_lookup_5197_13010);
++  g_test_add_func ("/goodixtls/lookup/5187-11033", test_lookup_5187_11033);
++  g_test_add_func ("/goodixtls/lookup/unknown", test_lookup_unknown);
++  g_test_add_func ("/goodixtls/lookup/transport", test_transport);
++  g_test_add_func ("/goodixtls/proto/body-cksum", test_body_cksum);
++  g_test_add_func ("/goodixtls/proto/frame-header", test_frame_header);
++  g_test_add_func ("/goodixtls/proto/decode-12bit", test_decode_12bit);
++  g_test_add_func ("/goodixtls/proto/bufsiz", test_bufsiz);
++  g_test_add_func ("/goodixtls/proto/mem-read-cmd", test_mem_read_cmd);
++  g_test_add_func ("/goodixtls/proto/mem-reply", test_mem_reply);
++  g_test_add_func ("/goodixtls/proto/config-valid", test_config_valid);
++  g_test_add_func ("/goodixtls/match/views-keep", test_views_keep);
++
++  return g_test_run ();
++}
+diff --git a/tests/test-udev-rules.sh b/tests/test-udev-rules.sh
+new file mode 100755
+index 00000000..07a9d594
+--- /dev/null
++++ b/tests/test-udev-rules.sh
+@@ -0,0 +1,23 @@
++#!/bin/sh -e
++# SPDX-License-Identifier: LGPL-2.1-or-later
++# Copyright (C) 2026 Matthias Gruss
++# Devices with a _CID (e.g. GXFP5197) have MODALIAS acpi:HID:CID:, so an
++# exact acpi:HID: match never binds spidev.
++
++if [ ! -x "$UDEV_RULES" ]; then
++    echo "E: UDEV_RULES (${UDEV_RULES}) unset or not executable."
++    exit 1
++fi
++
++rules=$($UDEV_RULES)
++
++if ! echo "$rules" | grep -q 'ENV{MODALIAS}=="acpi:GXFP5197:\*"'; then
++    echo "E: no spidev rule matching acpi:GXFP5197:* (HID with _CID)"
++    echo "$rules" | grep GXFP || true
++    exit 1
++fi
++
++if echo "$rules" | grep -q 'ENV{MODALIAS}=="acpi:[^"*]*:"'; then
++    echo "E: exact acpi:HID: match misses devices with a _CID"
++    exit 1
++fi

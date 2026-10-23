@@ -8,7 +8,7 @@ set -eu
 R=$(cd "$(dirname "$0")/.." && pwd)
 VER=1.94.9
 DEBVER=1:1.94.9-1
-OURVER=1:1.94.9-1+gxfp5197.3
+OURVER=1:1.94.9-1+gxfp5197.4
 W="$R/build/deb"
 A="$R/build/apt"
 
@@ -43,8 +43,8 @@ for f in debian/libfprint-2-2.postinst debian/libfprint-2-2.postinst.in; do
   grep -q GXFP5197 "$f"
 done
 
-DEBFULLNAME=${DEBFULLNAME:-$(git -C "$R" config user.name)} \
-DEBEMAIL=${DEBEMAIL:-$(git -C "$R" config user.email)} \
+DEBFULLNAME=${DEBFULLNAME:-$(git -C "$R" config user.name || echo "local build")} \
+DEBEMAIL=${DEBEMAIL:-$(git -C "$R" config user.email || echo "$USER@localhost")} \
   dch -v "$OURVER" -D trixie --force-distribution \
   "Goodix GXFP5187/GXFP5197 SPI (TLS-PSK) driver goodixtls (local build)."
 

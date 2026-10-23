@@ -6,7 +6,7 @@
 set -eu
 R=$(cd "$(dirname "$0")/.." && pwd)
 [ "$(id -u)" -eq 0 ] || { echo "run with sudo" >&2; exit 1; }
-apt-get install "$R"/build/deb/libfprint-2-2_1.94.9-1+gxfp5197.3_amd64.deb
+apt-get install "$R"/build/deb/libfprint-2-2_1.94.9-1+gxfp5197.4_amd64.deb
 install -m 0644 "$R/packaging/99-libfprint-goodixtls.pref" /etc/apt/preferences.d/
 systemctl daemon-reload
 systemctl try-restart fprintd

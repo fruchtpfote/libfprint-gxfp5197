@@ -73,10 +73,10 @@ index 0000000..6cd7323
 +};
 diff --git a/libfprint/drivers/goodixtls/goodix_model.c b/libfprint/drivers/goodixtls/goodix_model.c
 new file mode 100644
-index 0000000..f4d6693
+index 0000000..57a5a2c
 --- /dev/null
 +++ b/libfprint/drivers/goodixtls/goodix_model.c
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,201 @@
 +/*
 + * Goodix SPI (TLS-PSK) sensors: per-model constants and protocol helpers
 + *
@@ -270,12 +270,20 @@ index 0000000..f4d6693
 +    s += blk[i] | (blk[i + 1] << 8);
 +  return (guint16) -s == (blk[254] | (blk[255] << 8));
 +}
++
++guint
++gx_views_keep (guint have, guint adding, guint cap)
++{
++  guint room = adding < cap ? cap - adding : 0;
++
++  return MIN (have, room);
++}
 diff --git a/libfprint/drivers/goodixtls/goodix_model.h b/libfprint/drivers/goodixtls/goodix_model.h
 new file mode 100644
-index 0000000..daf68af
+index 0000000..9691e56
 --- /dev/null
 +++ b/libfprint/drivers/goodixtls/goodix_model.h
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,97 @@
 +/*
 + * Goodix SPI (TLS-PSK) sensors: per-model constants and protocol helpers
 + *
@@ -324,6 +332,10 @@ index 0000000..daf68af
 + * split_header, reset_*) may be used: they are what reading the firmware
 + * version needs, before gx_model_lookup can be asked. */
 +const GxModel *gx_model_transport (const gchar *acpi_id);
++
++/* How many of @have existing template views may be kept next to @adding new
++ * ones without the template exceeding @cap views. */
++guint gx_views_keep (guint have, guint adding, guint cap);
 +
 +/* Frame and command checksums. */
 +static inline guint8
@@ -1609,10 +1621,10 @@ index 0000000..0240547
 +void gx_tls_close (GxTls *tls);
 diff --git a/libfprint/drivers/goodixtls/goodixtls.c b/libfprint/drivers/goodixtls/goodixtls.c
 new file mode 100644
-index 0000000..64da87b
+index 0000000..9904666
 --- /dev/null
 +++ b/libfprint/drivers/goodixtls/goodixtls.c
-@@ -0,0 +1,2633 @@
+@@ -0,0 +1,2641 @@
 +/*
 + * Goodix GXFP5187/GXFP5197 SPI (TLS-PSK) driver for libfprint
 + *
@@ -3745,6 +3757,12 @@ index 0000000..64da87b
 +
 +      fpi_device_get_verify_data (dev, &tmpl);
 +      views = gx_views_from_print (tmpl);
++      /* A template carrying more views than the matcher was calibrated for
++       * is cut back, not trusted: the threshold does not rise past
++       * GX_MAX_VIEWS. */
++      if (views->len > GX_MAX_VIEWS)
++        g_ptr_array_remove_range (views, GX_MAX_VIEWS,
++                                  views->len - GX_MAX_VIEWS);
 +      apath = gx_adapt_path (tmpl);
 +      extra = gx_adapt_load (apath);
 +      gx_adapt_cap (extra, views->len);
@@ -4174,10 +4192,12 @@ index 0000000..64da87b
 +  if (ptype != FPI_PRINT_UNDEFINED)
 +    {
 +      g_autoptr(GPtrArray) old = gx_views_from_print (print);
-+      guint i;
-+      for (i = 0; i < old->len; i++)
-+        g_ptr_array_add (t->views, g_ptr_array_index (old, i));
-+      g_ptr_array_set_free_func (old, NULL);   /* ownership transferred */
++      guint i, keep = gx_views_keep (old->len, GX_ENROLL_VIEWS, GX_MAX_VIEWS);
++
++      /* Never past GX_MAX_VIEWS: the threshold stops rising there, so more
++       * fused views would only raise the false accept rate. */
++      for (i = 0; i < keep; i++)
++        g_ptr_array_add (t->views, g_ptr_array_steal_index (old, 0));
 +      if (t->views->len)
 +        fp_info ("enroll: kept %u existing views", t->views->len);
 +    }
@@ -4457,10 +4477,10 @@ index 07c924b..364940b 100644
 +endif
 diff --git a/tests/test-goodixtls.c b/tests/test-goodixtls.c
 new file mode 100644
-index 0000000..6a278bd
+index 0000000..4e8b6ed
 --- /dev/null
 +++ b/tests/test-goodixtls.c
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,187 @@
 +/*
 + * Unit tests for the goodixtls driver's protocol helpers and model table
 + *
@@ -4617,6 +4637,17 @@ index 0000000..6a278bd
 +  g_assert_false (gx_config_valid (blk, 255));
 +}
 +
++/* A template never grows past the view count the matcher was calibrated for. */
++static void
++test_views_keep (void)
++{
++  g_assert_cmpuint (gx_views_keep (20, 20, 30), ==, 10);
++  g_assert_cmpuint (gx_views_keep (5, 20, 30), ==, 5);
++  g_assert_cmpuint (gx_views_keep (40, 0, 30), ==, 30);
++  g_assert_cmpuint (gx_views_keep (10, 30, 30), ==, 0);
++  g_assert_cmpuint (gx_views_keep (10, 35, 30), ==, 0);
++}
++
 +int
 +main (int argc, char *argv[])
 +{
@@ -4633,6 +4664,7 @@ index 0000000..6a278bd
 +  g_test_add_func ("/goodixtls/proto/mem-read-cmd", test_mem_read_cmd);
 +  g_test_add_func ("/goodixtls/proto/mem-reply", test_mem_reply);
 +  g_test_add_func ("/goodixtls/proto/config-valid", test_config_valid);
++  g_test_add_func ("/goodixtls/match/views-keep", test_views_keep);
 +
 +  return g_test_run ();
 +}

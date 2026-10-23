@@ -1,0 +1,7 @@
+# Build dependencies of libfprint 1:1.94.9-1 (debian/control, as
+# dpkg-checkbuilddeps lists them) plus the packaging tools.
+build-essential fakeroot dpkg-dev devscripts
+debhelper dh-sequence-gir gir1.2-gobject-2.0-dev gir1.2-gio-2.0-dev
+gtk-doc-tools libcairo-dev libgirepository1.0-dev libglib2.0-dev
+libgudev-1.0-dev libgusb-dev libpixman-1-dev libssl-dev systemd-dev
+umockdev libglib2.0-doc libgusb-doc meson python3-cairo python3-gi
