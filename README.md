@@ -1,8 +1,11 @@
 # libfprint-gxfp5197
 
-Fingerprint driver for the **Goodix GXFP5197** SPI sensor in the
-**Huawei MateBook D (VLT-W50)**, for **Debian 13 (trixie)**.
-It also supports the GXFP5187 (MateBook X Pro).
+Fingerprint driver for the **Goodix GXFP5197** SPI sensor
+(ACPI HID `GXFP5197`) in the **Huawei MateBook D (VLT-W50)**, for
+**Debian 13 (trixie)**. It also supports the GXFP5187 (ACPI HID `GXFP5187`,
+MateBook X Pro).
+
+Check: `ls /sys/bus/acpi/devices/ | grep GXFP`
 
 [Deutsch weiter unten](#deutsch)
 
@@ -67,9 +70,12 @@ GXFP5197 support by Matthias Gruss. Not affiliated with Goodix or Huawei.
 
 ## Deutsch
 
-Fingerabdruck-Treiber für den SPI-Sensor **Goodix GXFP5197** im
-**Huawei MateBook D (VLT-W50)**, für **Debian 13 (trixie)**.
-Der GXFP5187 (MateBook X Pro) wird ebenfalls unterstützt.
+Fingerabdruck-Treiber für den SPI-Sensor **Goodix GXFP5197**
+(ACPI-HID `GXFP5197`) im **Huawei MateBook D (VLT-W50)**, für
+**Debian 13 (trixie)**. Der GXFP5187 (ACPI-HID `GXFP5187`, MateBook X Pro)
+wird ebenfalls unterstützt.
+
+Prüfen: `ls /sys/bus/acpi/devices/ | grep GXFP`
 
 ### Installieren
 
