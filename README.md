@@ -5,7 +5,8 @@ Fingerprint driver for the **Goodix GXFP5197** SPI sensor
 **Debian 13 (trixie)**. It also supports the GXFP5187 (ACPI HID `GXFP5187`,
 MateBook X Pro).
 
-Check: `ls /sys/bus/acpi/devices/ | grep GXFP`
+Check: `ls /sys/bus/acpi/devices/ | grep GXFP` should print `GXFP5197:00`
+(HID plus the kernel's instance number).
 
 [Deutsch weiter unten](#deutsch)
 
@@ -75,7 +76,8 @@ Fingerabdruck-Treiber für den SPI-Sensor **Goodix GXFP5197**
 **Debian 13 (trixie)**. Der GXFP5187 (ACPI-HID `GXFP5187`, MateBook X Pro)
 wird ebenfalls unterstützt.
 
-Prüfen: `ls /sys/bus/acpi/devices/ | grep GXFP`
+Prüfen: `ls /sys/bus/acpi/devices/ | grep GXFP` sollte `GXFP5197:00` ausgeben
+(HID plus laufende Nummer des Kernels).
 
 ### Installieren
 
